@@ -11,7 +11,7 @@ function cardHtml(item) {
   return `
     <div class="product-card">
       <a class="product-image" href="${esc(item.detailLink)}" target="_blank" rel="noopener noreferrer" data-id="${item.id}">
-        <img src="${esc(item.image)}" alt="" onerror="handleImgError(this)">
+        <img src="${esc(item.image)}" alt="" referrerpolicy="no-referrer" onerror="handleImgError(this)">
       </a>
       <div class="product-title">${esc(item.title)}</div>
       ${links ? `<div class="product-links">${links}</div>` : ''}

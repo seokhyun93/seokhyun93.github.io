@@ -121,16 +121,9 @@ function loginPage(error) {
   `);
 }
 
-function adminPage(recentRows, successParam) {
-  const rows = recentRows.map((r) => `
-    <tr>
-      <td>${esc(r.title)}</td>
-      <td>${r.clicks}</td>
-      <td>${new Date(r.created_at).toLocaleDateString('ko-KR')}</td>
-    </tr>`).join('');
-
-  const uploadScript = `
-    const form = document.querySelector('form[action="/admin/upload"]');
+function imageFormScript(imageRequired) {
+  return `
+    const form = document.querySelector('form.image-form');
     const fileInput = form.querySelector('input[name=image]');
     const urlInput = form.querySelector('input[name=image_url]');
     const modeRadios = form.querySelectorAll('input[name=image_mode]');
@@ -168,14 +161,17 @@ function adminPage(recentRows, successParam) {
     form.addEventListener('submit', async (e) => {
       const mode = form.querySelector('input[name=image_mode]:checked').value;
       if (mode === 'url') {
-        if (!urlInput.value.trim()) { e.preventDefault(); alert('이미지 URL을 입력해주세요.'); }
+        if (${imageRequired ? 'true' : 'false'} && !urlInput.value.trim()) { e.preventDefault(); alert('이미지 URL을 입력해주세요.'); }
         return;
       }
-      if (!fileInput.files[0]) { e.preventDefault(); alert('이미지를 선택해주세요.'); return; }
+      if (!fileInput.files[0]) {
+        if (${imageRequired ? 'true' : 'false'}) { e.preventDefault(); alert('이미지를 선택해주세요.'); }
+        return;
+      }
       if (fileInput.dataset.resized === '1') return;
       e.preventDefault();
       submitBtn.disabled = true;
-      submitBtn.textContent = '업로드 중...';
+      submitBtn.textContent = '저장 중...';
       try {
         const resized = await resizeImage(fileInput.files[0], 800, 0.82);
         const dt = new DataTransfer();
@@ -186,6 +182,37 @@ function adminPage(recentRows, successParam) {
       form.submit();
     });
   `;
+}
+
+function imageModeFieldsHtml(urlMode) {
+  return `
+    <div class="image-mode">
+      <label class="radio-inline"><input type="radio" name="image_mode" value="file" ${urlMode ? '' : 'checked'}> 파일 업로드</label>
+      <label class="radio-inline"><input type="radio" name="image_mode" value="url" ${urlMode ? 'checked' : ''}> URL 입력</label>
+    </div>
+    <input type="file" name="image" accept="image/*">
+    <input type="url" name="image_url" placeholder="https://..." style="${urlMode ? '' : 'display:none;'}" value="${urlMode ? esc(urlMode) : ''}">
+  `;
+}
+
+function linkFieldsHtml(n, label, links) {
+  const l = links[n - 1] || { label: '', url: '' };
+  return `
+    <label>링크 ${n}</label>
+    <div class="link-row">
+      <input type="text" name="link${n}_label" placeholder="예: ${label}" value="${esc(l.label)}">
+      <input type="url" name="link${n}_url" placeholder="https://..." value="${esc(l.url)}">
+    </div>`;
+}
+
+function adminPage(recentRows, successParam) {
+  const rows = recentRows.map((r) => `
+    <tr>
+      <td>${esc(r.title)}</td>
+      <td>${r.clicks}</td>
+      <td>${new Date(r.created_at).toLocaleDateString('ko-KR')}</td>
+      <td><a href="/admin/edit/${r.id}">수정</a></td>
+    </tr>`).join('');
 
   return page('상품 업로드', `
     <div class="wrap">
@@ -199,14 +226,9 @@ function adminPage(recentRows, successParam) {
       <h1>새 상품 업로드</h1>
       ${successParam === '1' ? '<div class="success">업로드되었습니다.</div>' : ''}
       ${successParam === 'missing' ? '<div class="error" style="margin-bottom:16px;">제목, 이미지, 상세페이지 링크는 필수입니다.</div>' : ''}
-      <form method="POST" action="/admin/upload" enctype="multipart/form-data">
+      <form class="image-form" method="POST" action="/admin/upload" enctype="multipart/form-data">
         <label>대표 이미지</label>
-        <div class="image-mode">
-          <label class="radio-inline"><input type="radio" name="image_mode" value="file" checked> 파일 업로드</label>
-          <label class="radio-inline"><input type="radio" name="image_mode" value="url"> URL 입력</label>
-        </div>
-        <input type="file" name="image" accept="image/*">
-        <input type="url" name="image_url" placeholder="https://..." style="display:none;">
+        ${imageModeFieldsHtml(null)}
 
         <label>상품명</label>
         <input type="text" name="title" required>
@@ -214,40 +236,60 @@ function adminPage(recentRows, successParam) {
         <label>상세페이지 링크 (내 블로그 글 주소)</label>
         <input type="url" name="detail_link" placeholder="https://blog.naver.com/..." required>
 
-        <label>링크 1</label>
-        <div class="link-row">
-          <input type="text" name="link1_label" placeholder="예: 토스">
-          <input type="url" name="link1_url" placeholder="https://...">
-        </div>
-
-        <label>링크 2</label>
-        <div class="link-row">
-          <input type="text" name="link2_label" placeholder="예: 네이버">
-          <input type="url" name="link2_url" placeholder="https://...">
-        </div>
-
-        <label>링크 3</label>
-        <div class="link-row">
-          <input type="text" name="link3_label" placeholder="예: 쿠팡">
-          <input type="url" name="link3_url" placeholder="https://...">
-        </div>
+        ${linkFieldsHtml(1, '토스', [])}
+        ${linkFieldsHtml(2, '네이버', [])}
+        ${linkFieldsHtml(3, '쿠팡', [])}
 
         <button type="submit">업로드</button>
       </form>
 
       <h1 style="margin-top:48px;">최근 업로드</h1>
       <table>
-        <thead><tr><th>상품명</th><th>클릭수</th><th>등록일</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="3" style="color:#bbb;">아직 업로드된 상품이 없습니다.</td></tr>'}</tbody>
+        <thead><tr><th>상품명</th><th>클릭수</th><th>등록일</th><th></th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="4" style="color:#bbb;">아직 업로드된 상품이 없습니다.</td></tr>'}</tbody>
       </table>
     </div>
-  `, uploadScript);
+  `, imageFormScript(true));
+}
+
+function editPage(product, errorParam) {
+  const urlMode = /^https?:\/\//.test(product.image) ? product.image : null;
+  return page('상품 수정', `
+    <div class="wrap">
+      <div class="nav">
+        <a href="/admin">업로드</a>
+        <a href="/admin/stats">클릭 통계</a>
+        <form method="POST" action="/admin/logout" style="margin-left:auto;">
+          <button type="submit" class="secondary">로그아웃</button>
+        </form>
+      </div>
+      <h1>상품 수정</h1>
+      ${errorParam === 'missing' ? '<div class="error" style="margin-bottom:16px;">상품명과 상세페이지 링크는 필수입니다.</div>' : ''}
+      <img class="thumb" src="${esc(product.image)}" alt="" referrerpolicy="no-referrer" style="width:64px;height:64px;margin-bottom:8px;">
+      <form class="image-form" method="POST" action="/admin/edit/${product.id}" enctype="multipart/form-data">
+        <label>대표 이미지 (바꾸려면 새로 선택/입력, 그대로 두면 유지됩니다)</label>
+        ${imageModeFieldsHtml(urlMode)}
+
+        <label>상품명</label>
+        <input type="text" name="title" value="${esc(product.title)}" required>
+
+        <label>상세페이지 링크 (내 블로그 글 주소)</label>
+        <input type="url" name="detail_link" value="${esc(product.detailLink)}" required>
+
+        ${linkFieldsHtml(1, '토스', product.links)}
+        ${linkFieldsHtml(2, '네이버', product.links)}
+        ${linkFieldsHtml(3, '쿠팡', product.links)}
+
+        <button type="submit">저장</button>
+      </form>
+    </div>
+  `, imageFormScript(false));
 }
 
 function statsPage(products) {
   const rows = products.map((p) => `
     <tr>
-      <td><img class="thumb" src="${esc(p.image)}" alt=""></td>
+      <td><img class="thumb" src="${esc(p.image)}" alt="" referrerpolicy="no-referrer"></td>
       <td>${esc(p.title)}</td>
       <td>${p.clicks}</td>
       <td>${new Date(p.createdAt).toLocaleDateString('ko-KR')}</td>
@@ -315,6 +357,29 @@ async function handleLogout() {
   });
 }
 
+async function resolveImageKey(env, form) {
+  const image = form.get('image');
+  const imageUrl = (form.get('image_url') || '').toString().trim();
+  const hasFile = image && typeof image === 'object' && image.size > 0;
+  const hasUrl = /^https?:\/\//.test(imageUrl);
+
+  if (hasFile) {
+    const ext = (image.type && image.type.split('/')[1]) || 'jpg';
+    const key = `products/${crypto.randomUUID()}.${ext}`;
+    await env.IMAGES.put(key, await image.arrayBuffer(), { httpMetadata: { contentType: image.type || 'image/jpeg' } });
+    return key;
+  }
+  if (hasUrl) return imageUrl;
+  return null;
+}
+
+function readLinkFields(form) {
+  return [1, 2, 3].map((n) => ({
+    label: (form.get(`link${n}_label`) || '').toString().trim(),
+    url: (form.get(`link${n}_url`) || '').toString().trim(),
+  }));
+}
+
 async function handleUpload(request, env) {
   if (!(await isAuthed(request, env))) return new Response('Unauthorized', { status: 401 });
   await ensureSchema(env);
@@ -322,29 +387,13 @@ async function handleUpload(request, env) {
   const form = await request.formData();
   const title = (form.get('title') || '').toString().trim();
   const detailLink = (form.get('detail_link') || '').toString().trim();
-  const image = form.get('image');
-  const imageUrl = (form.get('image_url') || '').toString().trim();
+  const key = await resolveImageKey(env, form);
 
-  const hasFile = image && typeof image === 'object' && image.size > 0;
-  const hasUrl = /^https?:\/\//.test(imageUrl);
-
-  if (!title || !detailLink || !(hasFile || hasUrl)) {
+  if (!title || !detailLink || !key) {
     return new Response(null, { status: 303, headers: { Location: '/admin?error=missing' } });
   }
 
-  let key;
-  if (hasFile) {
-    const ext = (image.type && image.type.split('/')[1]) || 'jpg';
-    key = `products/${crypto.randomUUID()}.${ext}`;
-    await env.IMAGES.put(key, await image.arrayBuffer(), { httpMetadata: { contentType: image.type || 'image/jpeg' } });
-  } else {
-    key = imageUrl;
-  }
-
-  const links = [1, 2, 3].map((n) => ({
-    label: (form.get(`link${n}_label`) || '').toString().trim(),
-    url: (form.get(`link${n}_url`) || '').toString().trim(),
-  }));
+  const links = readLinkFields(form);
 
   await env.DB.prepare(
     `INSERT INTO products (title, image_key, detail_link, link1_label, link1_url, link2_label, link2_url, link3_label, link3_url, clicks, created_at)
@@ -355,6 +404,47 @@ async function handleUpload(request, env) {
     links[1].label || null, links[1].url || null,
     links[2].label || null, links[2].url || null,
     Date.now()
+  ).run();
+
+  return new Response(null, { status: 303, headers: { Location: '/admin?success=1' } });
+}
+
+async function handleEditPage(request, env, id) {
+  if (!(await isAuthed(request, env))) return htmlResponse(loginPage(null));
+  await ensureSchema(env);
+  const row = await env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(id).first();
+  if (!row) return new Response('Not Found', { status: 404 });
+  const url = new URL(request.url);
+  return htmlResponse(editPage(normalizeRow(row), url.searchParams.get('error')));
+}
+
+async function handleEditSubmit(request, env, id) {
+  if (!(await isAuthed(request, env))) return new Response('Unauthorized', { status: 401 });
+  await ensureSchema(env);
+
+  const existing = await env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(id).first();
+  if (!existing) return new Response('Not Found', { status: 404 });
+
+  const form = await request.formData();
+  const title = (form.get('title') || '').toString().trim();
+  const detailLink = (form.get('detail_link') || '').toString().trim();
+
+  if (!title || !detailLink) {
+    return new Response(null, { status: 303, headers: { Location: `/admin/edit/${id}?error=missing` } });
+  }
+
+  const newKey = await resolveImageKey(env, form);
+  const key = newKey || existing.image_key;
+  const links = readLinkFields(form);
+
+  await env.DB.prepare(
+    `UPDATE products SET title = ?, image_key = ?, detail_link = ?, link1_label = ?, link1_url = ?, link2_label = ?, link2_url = ?, link3_label = ?, link3_url = ? WHERE id = ?`
+  ).bind(
+    title, key, detailLink,
+    links[0].label || null, links[0].url || null,
+    links[1].label || null, links[1].url || null,
+    links[2].label || null, links[2].url || null,
+    id
   ).run();
 
   return new Response(null, { status: 303, headers: { Location: '/admin?success=1' } });
@@ -414,6 +504,12 @@ export default {
       if (path === '/admin/logout' && request.method === 'POST') return handleLogout();
       if (path === '/admin/upload' && request.method === 'POST') return handleUpload(request, env);
       if (path === '/admin/stats' && request.method === 'GET') return handleStats(request, env);
+      if (path.startsWith('/admin/edit/') && request.method === 'GET') {
+        return handleEditPage(request, env, parseInt(path.slice('/admin/edit/'.length), 10));
+      }
+      if (path.startsWith('/admin/edit/') && request.method === 'POST') {
+        return handleEditSubmit(request, env, parseInt(path.slice('/admin/edit/'.length), 10));
+      }
 
       if (path === '/api/products' && request.method === 'GET') return handleListProducts(env, url);
       if (path.startsWith('/api/click/') && request.method === 'POST') return handleClick(env, path);
