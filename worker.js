@@ -62,7 +62,7 @@ function normalizeRow(r) {
   return {
     id: r.id,
     title: r.title,
-    image: `/images/${r.image_key}`,
+    image: /^https?:\/\//.test(r.image_key) ? r.image_key : `/images/${r.image_key}`,
     detailLink: r.detail_link,
     links,
     clicks: r.clicks,
@@ -97,6 +97,9 @@ function baseStyle() {
     .thumb { width:36px; height:36px; object-fit:cover; border-radius:4px; background:#fafafa; border:1px solid #f0f0f0; }
     .link-row { display:flex; gap:8px; }
     .link-row input { flex:1; }
+    .image-mode { display:flex; gap:16px; margin-top:4px; }
+    .radio-inline { display:flex !important; align-items:center; gap:5px; font-size:12.5px; color:#333; margin:0 !important; cursor:pointer; }
+    .radio-inline input { width:auto; }
   `;
 }
 
@@ -129,7 +132,24 @@ function adminPage(recentRows, successParam) {
   const uploadScript = `
     const form = document.querySelector('form[action="/admin/upload"]');
     const fileInput = form.querySelector('input[name=image]');
+    const urlInput = form.querySelector('input[name=image_url]');
+    const modeRadios = form.querySelectorAll('input[name=image_mode]');
     const submitBtn = form.querySelector('button[type=submit]');
+
+    function applyImageMode() {
+      const mode = form.querySelector('input[name=image_mode]:checked').value;
+      if (mode === 'file') {
+        fileInput.style.display = '';
+        urlInput.style.display = 'none';
+        urlInput.value = '';
+      } else {
+        fileInput.style.display = 'none';
+        fileInput.value = '';
+        urlInput.style.display = '';
+      }
+    }
+    modeRadios.forEach((r) => r.addEventListener('change', applyImageMode));
+    applyImageMode();
 
     async function resizeImage(file, maxDim, quality) {
       const bitmap = await createImageBitmap(file);
@@ -146,7 +166,13 @@ function adminPage(recentRows, successParam) {
     }
 
     form.addEventListener('submit', async (e) => {
-      if (!fileInput.files[0] || fileInput.dataset.resized === '1') return;
+      const mode = form.querySelector('input[name=image_mode]:checked').value;
+      if (mode === 'url') {
+        if (!urlInput.value.trim()) { e.preventDefault(); alert('이미지 URL을 입력해주세요.'); }
+        return;
+      }
+      if (!fileInput.files[0]) { e.preventDefault(); alert('이미지를 선택해주세요.'); return; }
+      if (fileInput.dataset.resized === '1') return;
       e.preventDefault();
       submitBtn.disabled = true;
       submitBtn.textContent = '업로드 중...';
@@ -175,7 +201,12 @@ function adminPage(recentRows, successParam) {
       ${successParam === 'missing' ? '<div class="error" style="margin-bottom:16px;">제목, 이미지, 상세페이지 링크는 필수입니다.</div>' : ''}
       <form method="POST" action="/admin/upload" enctype="multipart/form-data">
         <label>대표 이미지</label>
-        <input type="file" name="image" accept="image/*" required>
+        <div class="image-mode">
+          <label class="radio-inline"><input type="radio" name="image_mode" value="file" checked> 파일 업로드</label>
+          <label class="radio-inline"><input type="radio" name="image_mode" value="url"> URL 입력</label>
+        </div>
+        <input type="file" name="image" accept="image/*">
+        <input type="url" name="image_url" placeholder="https://..." style="display:none;">
 
         <label>상품명</label>
         <input type="text" name="title" required>
@@ -292,14 +323,23 @@ async function handleUpload(request, env) {
   const title = (form.get('title') || '').toString().trim();
   const detailLink = (form.get('detail_link') || '').toString().trim();
   const image = form.get('image');
+  const imageUrl = (form.get('image_url') || '').toString().trim();
 
-  if (!title || !detailLink || !(image && image.size > 0)) {
+  const hasFile = image && typeof image === 'object' && image.size > 0;
+  const hasUrl = /^https?:\/\//.test(imageUrl);
+
+  if (!title || !detailLink || !(hasFile || hasUrl)) {
     return new Response(null, { status: 303, headers: { Location: '/admin?error=missing' } });
   }
 
-  const ext = (image.type && image.type.split('/')[1]) || 'jpg';
-  const key = `products/${crypto.randomUUID()}.${ext}`;
-  await env.IMAGES.put(key, await image.arrayBuffer(), { httpMetadata: { contentType: image.type || 'image/jpeg' } });
+  let key;
+  if (hasFile) {
+    const ext = (image.type && image.type.split('/')[1]) || 'jpg';
+    key = `products/${crypto.randomUUID()}.${ext}`;
+    await env.IMAGES.put(key, await image.arrayBuffer(), { httpMetadata: { contentType: image.type || 'image/jpeg' } });
+  } else {
+    key = imageUrl;
+  }
 
   const links = [1, 2, 3].map((n) => ({
     label: (form.get(`link${n}_label`) || '').toString().trim(),
