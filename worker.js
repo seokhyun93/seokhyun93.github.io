@@ -369,9 +369,6 @@ export default {
     const path = url.pathname;
 
     try {
-      if (path === '/admin/debug' && request.method === 'GET') {
-        return jsonResponse({ hasSecret: !!env.ADMIN_PASSWORD, length: (env.ADMIN_PASSWORD || '').length });
-      }
       if (path === '/admin' && request.method === 'GET') return handleAdminHome(request, env, url);
       if (path === '/admin/login' && request.method === 'POST') return handleLogin(request, env);
       if (path === '/admin/logout' && request.method === 'POST') return handleLogout();
