@@ -440,19 +440,50 @@ async function handleUpload(request, env) {
   }
 
   const links = readLinkFields(form);
+  await insertProduct(env, { title, key, detailLink, links });
 
+  return new Response(null, { status: 303, headers: { Location: '/admin?success=1' } });
+}
+
+async function insertProduct(env, { title, key, detailLink, links }) {
   await env.DB.prepare(
     `INSERT INTO products (title, image_key, detail_link, link1_label, link1_url, link2_label, link2_url, link3_label, link3_url, clicks, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`
   ).bind(
     title, key, detailLink,
-    links[0].label || null, links[0].url || null,
-    links[1].label || null, links[1].url || null,
-    links[2].label || null, links[2].url || null,
+    links[0]?.label || null, links[0]?.url || null,
+    links[1]?.label || null, links[1]?.url || null,
+    links[2]?.label || null, links[2]?.url || null,
     Date.now()
   ).run();
+}
 
-  return new Response(null, { status: 303, headers: { Location: '/admin?success=1' } });
+async function handleApiUpload(request, env) {
+  const auth = request.headers.get('Authorization') || '';
+  const token = auth.replace(/^Bearer\s+/i, '');
+  if (!env.API_TOKEN || token !== env.API_TOKEN) {
+    return jsonResponse({ error: 'unauthorized' }, 401);
+  }
+  await ensureSchema(env);
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: 'invalid json' }, 400);
+  }
+
+  const title = (body.title || '').toString().trim();
+  const detailLink = (body.detail_link || '').toString().trim();
+  const imageUrl = (body.image_url || '').toString().trim();
+  const links = Array.isArray(body.links) ? body.links.slice(0, 3) : [];
+
+  if (!title || !detailLink || !/^https?:\/\//.test(imageUrl)) {
+    return jsonResponse({ error: 'title, detail_link, image_url are required' }, 400);
+  }
+
+  await insertProduct(env, { title, key: imageUrl, detailLink, links });
+  return jsonResponse({ ok: true });
 }
 
 async function handleEditPage(request, env, id) {
@@ -566,6 +597,7 @@ export default {
       }
 
       if (path === '/api/products' && request.method === 'GET') return handleListProducts(env, url);
+      if (path === '/api/admin/products' && request.method === 'POST') return handleApiUpload(request, env);
       if (path.startsWith('/api/click/') && request.method === 'POST') return handleClick(env, path);
 
       if (path.startsWith('/images/') && request.method === 'GET') return handleImage(env, path);
