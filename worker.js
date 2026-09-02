@@ -588,6 +588,9 @@ export default {
       if (path === '/admin/logout' && request.method === 'POST') return handleLogout();
       if (path === '/admin/upload' && request.method === 'POST') return handleUpload(request, env);
       if (path === '/admin/stats' && request.method === 'GET') return handleStats(request, env);
+      if (path === '/admin/debug' && request.method === 'GET') {
+        return jsonResponse({ hasToken: !!env.API_TOKEN, length: (env.API_TOKEN || '').length });
+      }
       if (path === '/admin/products' && request.method === 'GET') return handleProductsPage(request, env, url);
       if (path.startsWith('/admin/edit/') && request.method === 'GET') {
         return handleEditPage(request, env, parseInt(path.slice('/admin/edit/'.length), 10));
