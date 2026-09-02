@@ -262,26 +262,39 @@ function adminPagerHtml(basePath, page, totalPages) {
     </div>`;
 }
 
-function productsPage(rows, pageNum, totalPages) {
+function productsPage(rows, pageNum, totalPages, origin) {
   const body = rows.map((r) => `
     <tr>
       <td>${esc(r.title)}</td>
       <td>${r.clicks}</td>
       <td>${new Date(r.created_at).toLocaleDateString('ko-KR')}</td>
       <td><a href="/admin/edit/${r.id}">수정</a></td>
+      <td><button type="button" class="secondary copy-link-btn" data-link="${esc(origin)}/?q=${encodeURIComponent(r.title)}">링크복사</button></td>
     </tr>`).join('');
+
+  const copyScript = `
+    document.addEventListener('click', (e) => {
+      const btn = e.target.closest('.copy-link-btn');
+      if (!btn) return;
+      navigator.clipboard.writeText(btn.dataset.link).then(() => {
+        const original = btn.textContent;
+        btn.textContent = '복사됨';
+        setTimeout(() => { btn.textContent = original; }, 1200);
+      });
+    });
+  `;
 
   return page('최근 업로드', `
     <div class="wrap">
       ${navHtml('products')}
       <h1>최근 업로드</h1>
       <table>
-        <thead><tr><th>상품명</th><th>클릭수</th><th>등록일</th><th></th></tr></thead>
-        <tbody>${body || '<tr><td colspan="4" style="color:#bbb;">아직 업로드된 상품이 없습니다.</td></tr>'}</tbody>
+        <thead><tr><th>상품명</th><th>클릭수</th><th>등록일</th><th></th><th></th></tr></thead>
+        <tbody>${body || '<tr><td colspan="5" style="color:#bbb;">아직 업로드된 상품이 없습니다.</td></tr>'}</tbody>
       </table>
       ${rows.length ? adminPagerHtml('/admin/products', pageNum, totalPages) : ''}
     </div>
-  `);
+  `, copyScript);
 }
 
 function editPage(product, errorParam) {
@@ -350,7 +363,7 @@ async function handleProductsPage(request, env, url) {
   const { results } = await env.DB.prepare('SELECT id, title, clicks, created_at FROM products ORDER BY created_at DESC LIMIT ? OFFSET ?').bind(PAGE_SIZE, offset).all();
   const countRow = await env.DB.prepare('SELECT COUNT(*) as total FROM products').first();
   const totalPages = Math.max(1, Math.ceil(countRow.total / PAGE_SIZE));
-  return htmlResponse(productsPage(results, pageNum, totalPages));
+  return htmlResponse(productsPage(results, pageNum, totalPages, url.origin));
 }
 
 async function handleStats(request, env) {

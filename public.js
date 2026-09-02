@@ -80,5 +80,11 @@ async function runSearch(q) {
   }
 }
 
-loadPopular();
-loadPage(1);
+const initialQuery = new URLSearchParams(location.search).get('q');
+if (initialQuery) {
+  searchInput.value = initialQuery;
+  runSearch(initialQuery.trim());
+} else {
+  loadPopular();
+  loadPage(1);
+}
