@@ -271,7 +271,7 @@ function productsPage(rows, pageNum, totalPages, origin) {
       <td>${r.clicks}</td>
       <td>${new Date(r.created_at).toLocaleDateString('ko-KR')}</td>
       <td><a href="/admin/edit/${r.id}">수정</a></td>
-      <td><button type="button" class="secondary copy-link-btn" data-link="${esc(origin)}/?q=${encodeURIComponent(r.title)}">링크복사</button></td>
+      <td><button type="button" class="secondary copy-link-btn" data-link="${esc(origin)}/?p=${r.id}">링크복사</button></td>
     </tr>`).join('');
 
   const copyScript = `
@@ -498,6 +498,13 @@ async function handleEditSubmit(request, env, id) {
 
 async function handleListProducts(env, url) {
   await ensureSchema(env);
+  const id = parseInt(url.searchParams.get('id') || '', 10);
+
+  if (id) {
+    const row = await env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(id).first();
+    return jsonResponse({ items: row ? [normalizeRow(row)] : [] });
+  }
+
   const q = (url.searchParams.get('q') || '').trim();
 
   if (q) {

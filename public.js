@@ -80,8 +80,22 @@ async function runSearch(q) {
   }
 }
 
-const initialQuery = new URLSearchParams(location.search).get('q');
-if (initialQuery) {
+async function showProduct(id) {
+  const res = await fetch('/api/products?id=' + encodeURIComponent(id));
+  const data = await res.json();
+  normalSectionsEl.style.display = 'none';
+  searchResultEl.style.display = '';
+  searchResultEl.innerHTML = data.items.length
+    ? `<div class="grid">${data.items.map(cardHtml).join('')}</div>`
+    : '<div class="empty">상품을 찾을 수 없습니다.</div>';
+}
+
+const initialParams = new URLSearchParams(location.search);
+const initialId = initialParams.get('p');
+const initialQuery = initialParams.get('q');
+if (initialId) {
+  showProduct(initialId);
+} else if (initialQuery) {
   searchInput.value = initialQuery;
   runSearch(initialQuery.trim());
 } else {
