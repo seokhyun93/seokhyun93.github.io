@@ -5,6 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>상품 모음</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap">
+<script>
+  function handleImgError(el) {
+    el.onerror = null;
+    el.src = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><rect width='140' height='140' fill='%23fafafa'/></svg>";
+  }
+</script>
 <style>
   :root {
     --accent: #c9705a;
@@ -83,34 +89,12 @@
     padding: 0 24px 36px;
   }
   .category-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 12px;
     margin-bottom: 16px;
   }
   .category-header .title {
     font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.06em;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .category-header .toggle {
-    font-size: 11px;
-    color: #9a9a9a;
-    letter-spacing: 0.01em;
-    white-space: nowrap;
-    cursor: pointer;
-    background: none;
-    border: none;
-    padding: 0;
-    flex-shrink: 0;
-    font-family: inherit;
-  }
-  .category-header .toggle:hover {
-    color: #141414;
   }
   .row {
     display: flex;
@@ -120,17 +104,22 @@
     scrollbar-width: none;
   }
   .row::-webkit-scrollbar { display: none; }
-  .row.expanded {
-    flex-wrap: wrap;
-    overflow-x: visible;
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+    gap: 24px 12px;
   }
-  .card {
+  .product-card, .row .product-card {
+    display: block;
+  }
+  .row .product-card {
     flex: 0 0 108px;
+  }
+  .product-image {
     display: block;
     text-decoration: none;
-    color: inherit;
   }
-  .card img {
+  .product-image img {
     width: 100%;
     aspect-ratio: 1 / 1;
     object-fit: cover;
@@ -140,7 +129,7 @@
     display: block;
     margin-bottom: 10px;
   }
-  .card .title {
+  .product-title {
     font-size: 12px;
     line-height: 1.45;
     color: #333;
@@ -148,6 +137,49 @@
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
+  }
+  .product-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .link-chip {
+    font-size: 11px;
+    padding: 4px 10px;
+    border: 1px solid #eee;
+    border-radius: 999px;
+    color: #555;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .link-chip:hover {
+    border-color: var(--accent);
+    color: #141414;
+  }
+  .pager {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 16px;
+    margin-top: 28px;
+    font-size: 12.5px;
+    color: #666;
+  }
+  .pager button {
+    font-family: inherit;
+    font-size: 12px;
+    padding: 6px 14px;
+    border: 1px solid #eee;
+    background: #fff;
+    border-radius: 999px;
+    cursor: pointer;
+    color: #141414;
+  }
+  .pager button:disabled {
+    color: #ccc;
+    border-color: #f5f5f5;
+    cursor: default;
   }
   .empty {
     text-align: center;
@@ -165,13 +197,13 @@
 </head>
 <body>
 
-<div class="disclaimer" id="disclaimer"></div>
+<div class="disclaimer">쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다. 상품 목록 및 상품에 대한 설명은 운영자가 직접 구성하고 작성한 것으로, 이에 대한 모든 책임은 운영자에게 있습니다.</div>
 
 <main>
   <div class="profile">
-    <img id="avatarImg" src="" alt="">
-    <div class="username" id="usernameEl"></div>
-    <div class="bio" id="bioEl"></div>
+    <img id="avatarImg" src="images/avatar.jpg" alt="" onerror="handleImgError(this)">
+    <div class="username">select_home</div>
+    <div class="bio">이쁘고 유용한 꿀템만 소개해요❤️</div>
   </div>
 
   <div class="search-box">
@@ -181,82 +213,23 @@
     </span>
   </div>
 
-  <div id="categoryContainer"></div>
+  <div id="normalSections">
+    <div class="category">
+      <div class="category-header"><div class="title">💗인기 제품💗</div></div>
+      <div class="row" id="popularRow"></div>
+    </div>
+
+    <div class="category">
+      <div class="category-header"><div class="title">전체 상품</div></div>
+      <div class="grid" id="productGrid"></div>
+      <div class="pager" id="pager"></div>
+    </div>
+  </div>
+
   <div id="searchResult" style="display:none;"></div>
 </main>
 
-<script src="data.js"></script>
-<script>
-  const DEFAULT_DISCLAIMER = "쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다. 상품 목록 및 상품에 대한 설명은 운영자가 직접 구성하고 작성한 것으로, 이에 대한 모든 책임은 운영자에게 있습니다.";
-  const FALLBACK_IMG = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><rect width='140' height='140' fill='%23fafafa'/></svg>";
-  const FALLBACK_AVATAR = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='84' height='84'><rect width='84' height='84' fill='%23f3f3f3'/></svg>";
-
-  document.getElementById('disclaimer').textContent = (typeof disclaimer === 'string' && disclaimer) ? disclaimer : DEFAULT_DISCLAIMER;
-  const avatarEl = document.getElementById('avatarImg');
-  avatarEl.src = profile.avatar;
-  avatarEl.onerror = function () { avatarEl.onerror = null; avatarEl.src = FALLBACK_AVATAR; };
-  document.getElementById('usernameEl').textContent = profile.username;
-  document.getElementById('bioEl').textContent = profile.bio;
-
-  function handleImgError(el) {
-    el.onerror = null;
-    el.src = FALLBACK_IMG;
-  }
-
-  function cardHtml(item) {
-    return `
-      <a class="card" href="${item.link}" target="_blank" rel="noopener noreferrer">
-        <img src="${item.image}" alt="" onerror="handleImgError(this)">
-        <div class="title">${item.title}</div>
-      </a>`;
-  }
-
-  const categoryContainer = document.getElementById('categoryContainer');
-
-  categories.forEach((cat, idx) => {
-    const section = document.createElement('div');
-    section.className = 'category';
-    section.innerHTML = `
-      <div class="category-header">
-        <div class="title">${cat.title}</div>
-        <button class="toggle" data-idx="${idx}">펼쳐보기</button>
-      </div>
-      <div class="row" id="row-${idx}">
-        ${cat.items.map(cardHtml).join('')}
-      </div>`;
-    categoryContainer.appendChild(section);
-  });
-
-  categoryContainer.addEventListener('click', (e) => {
-    if (!e.target.classList.contains('toggle')) return;
-    const idx = e.target.dataset.idx;
-    const row = document.getElementById('row-' + idx);
-    const expanded = row.classList.toggle('expanded');
-    e.target.textContent = expanded ? '접기' : '펼쳐보기';
-  });
-
-  const searchInput = document.getElementById('searchInput');
-  const searchResult = document.getElementById('searchResult');
-
-  searchInput.addEventListener('input', () => {
-    const q = searchInput.value.trim().toLowerCase();
-    if (!q) {
-      categoryContainer.style.display = '';
-      searchResult.style.display = 'none';
-      return;
-    }
-    const matches = categories.flatMap(c => c.items).filter(item => item.title.toLowerCase().includes(q));
-    categoryContainer.style.display = 'none';
-    searchResult.style.display = '';
-    if (matches.length === 0) {
-      searchResult.innerHTML = `<div class="empty">검색 결과가 없습니다.</div>`;
-    } else {
-      searchResult.innerHTML = `
-        <div class="result-title">검색 결과 (${matches.length})</div>
-        <div class="row expanded">${matches.map(cardHtml).join('')}</div>`;
-    }
-  });
-</script>
+<script src="public.js"></script>
 
 </body>
 </html>

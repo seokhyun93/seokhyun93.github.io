@@ -1,3 +1,6 @@
 .git
 .wrangler
 wrangler.toml
+worker.js
+schema.sql
+design
