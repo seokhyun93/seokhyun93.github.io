@@ -88,6 +88,7 @@ function productDetailHtml(item) {
   const instagram = item.instagramUrl
     ? `<a class="link-chip" href="${esc(item.instagramUrl)}" target="_blank" rel="noopener noreferrer" data-id="${item.id}">인스타그램 게시물 보기</a>`
     : '';
+  const threads = item.threadsEmbedHtml ? `<div class="threads-embed">${item.threadsEmbedHtml}</div>` : '';
   return `
     <div class="product-detail">
       <a class="product-image" href="${esc(item.detailLink)}" target="_blank" rel="noopener noreferrer" data-id="${item.id}">
@@ -96,7 +97,15 @@ function productDetailHtml(item) {
       <div class="product-title">${esc(item.title)}</div>
       ${links || instagram ? `<div class="product-links">${links}${instagram}</div>` : ''}
       ${video}
+      ${threads}
     </div>`;
+}
+
+function loadThreadsEmbedScript() {
+  const script = document.createElement('script');
+  script.src = 'https://www.threads.com/embed.js';
+  script.async = true;
+  document.body.appendChild(script);
 }
 
 async function showProduct(id) {
@@ -106,6 +115,7 @@ async function showProduct(id) {
   if (data.items.length) {
     searchInput.value = data.items[0].title;
     searchResultEl.innerHTML = productDetailHtml(data.items[0]);
+    if (data.items[0].threadsEmbedHtml) loadThreadsEmbedScript();
   } else {
     searchResultEl.innerHTML = '<div class="empty">상품을 찾을 수 없습니다.</div>';
   }

@@ -9,7 +9,7 @@ async function ensureSchema(env) {
   await env.DB.prepare(
     'CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, image_key TEXT NOT NULL, detail_link TEXT NOT NULL, link1_label TEXT, link1_url TEXT, link2_label TEXT, link2_url TEXT, link3_label TEXT, link3_url TEXT, clicks INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)'
   ).run();
-  for (const col of ['youtube_url TEXT', 'instagram_url TEXT']) {
+  for (const col of ['youtube_url TEXT', 'instagram_url TEXT', 'threads_embed_html TEXT']) {
     try {
       await env.DB.prepare(`ALTER TABLE products ADD COLUMN ${col}`).run();
     } catch (e) {
@@ -83,6 +83,7 @@ function normalizeRow(r) {
     youtubeUrl: r.youtube_url || null,
     youtubeEmbed: youtubeEmbedUrl(r.youtube_url),
     instagramUrl: r.instagram_url || null,
+    threadsEmbedHtml: r.threads_embed_html || null,
   };
 }
 
@@ -94,10 +95,11 @@ function baseStyle() {
     .wrap { max-width: 640px; margin: 0 auto; padding: 48px 24px 80px; }
     h1 { font-size:16px; font-weight:700; margin:0 0 24px; }
     label { display:block; font-size:12px; color:#666; margin:16px 0 6px; }
-    input[type=text], input[type=url], input[type=password] {
+    input[type=text], input[type=url], input[type=password], textarea {
       width:100%; padding:10px 12px; font-size:14px; border:1px solid #e5e5e5; border-radius:6px; font-family:inherit; outline:none;
     }
-    input:focus { border-color:#c9705a; }
+    textarea { resize:vertical; }
+    input:focus, textarea:focus { border-color:#c9705a; }
     input[type=file] { margin-top:4px; font-size:13px; }
     button { margin-top:24px; padding:11px 20px; font-size:13px; font-weight:700; color:#fff; background:#141414; border:none; border-radius:6px; cursor:pointer; font-family:inherit; }
     button:disabled { background:#ccc; cursor:default; }
@@ -268,6 +270,9 @@ function adminPage(successParam) {
         <label>인스타그램 게시물 링크 (선택)</label>
         <input type="url" name="instagram_url" placeholder="https://instagram.com/p/...">
 
+        <label>스레드 게시물 임베드 코드 (선택)</label>
+        <textarea name="threads_embed_html" rows="4" placeholder="스레드 게시물의 공유 → 임베드 코드 가져오기에서 복사한 코드 전체를 붙여넣어주세요"></textarea>
+
         <button type="submit">업로드</button>
       </form>
     </div>
@@ -348,6 +353,9 @@ function editPage(product, errorParam) {
 
         <label>인스타그램 게시물 링크 (선택)</label>
         <input type="url" name="instagram_url" value="${esc(product.instagramUrl || '')}" placeholder="https://instagram.com/p/...">
+
+        <label>스레드 게시물 임베드 코드 (선택)</label>
+        <textarea name="threads_embed_html" rows="4" placeholder="스레드 게시물의 공유 → 임베드 코드 가져오기에서 복사한 코드 전체를 붙여넣어주세요">${esc(product.threadsEmbedHtml || '')}</textarea>
 
         <button type="submit">저장</button>
       </form>
@@ -470,21 +478,22 @@ async function handleUpload(request, env) {
   const links = readLinkFields(form);
   const youtubeUrl = (form.get('youtube_url') || '').toString().trim();
   const instagramUrl = (form.get('instagram_url') || '').toString().trim();
-  await insertProduct(env, { title, key, detailLink, links, youtubeUrl, instagramUrl });
+  const threadsEmbedHtml = (form.get('threads_embed_html') || '').toString().trim();
+  await insertProduct(env, { title, key, detailLink, links, youtubeUrl, instagramUrl, threadsEmbedHtml });
 
   return new Response(null, { status: 303, headers: { Location: '/admin?success=1' } });
 }
 
-async function insertProduct(env, { title, key, detailLink, links, youtubeUrl, instagramUrl }) {
+async function insertProduct(env, { title, key, detailLink, links, youtubeUrl, instagramUrl, threadsEmbedHtml }) {
   await env.DB.prepare(
-    `INSERT INTO products (title, image_key, detail_link, link1_label, link1_url, link2_label, link2_url, link3_label, link3_url, youtube_url, instagram_url, clicks, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`
+    `INSERT INTO products (title, image_key, detail_link, link1_label, link1_url, link2_label, link2_url, link3_label, link3_url, youtube_url, instagram_url, threads_embed_html, clicks, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`
   ).bind(
     title, key, detailLink,
     links[0]?.label || null, links[0]?.url || null,
     links[1]?.label || null, links[1]?.url || null,
     links[2]?.label || null, links[2]?.url || null,
-    youtubeUrl || null, instagramUrl || null,
+    youtubeUrl || null, instagramUrl || null, threadsEmbedHtml || null,
     Date.now()
   ).run();
 }
@@ -515,7 +524,8 @@ async function handleApiUpload(request, env) {
 
   const youtubeUrl = (body.youtube_url || '').toString().trim();
   const instagramUrl = (body.instagram_url || '').toString().trim();
-  await insertProduct(env, { title, key: imageUrl, detailLink, links, youtubeUrl, instagramUrl });
+  const threadsEmbedHtml = (body.threads_embed_html || '').toString().trim();
+  await insertProduct(env, { title, key: imageUrl, detailLink, links, youtubeUrl, instagramUrl, threadsEmbedHtml });
   return jsonResponse({ ok: true });
 }
 
@@ -548,15 +558,16 @@ async function handleEditSubmit(request, env, id) {
   const links = readLinkFields(form);
   const youtubeUrl = (form.get('youtube_url') || '').toString().trim();
   const instagramUrl = (form.get('instagram_url') || '').toString().trim();
+  const threadsEmbedHtml = (form.get('threads_embed_html') || '').toString().trim();
 
   await env.DB.prepare(
-    `UPDATE products SET title = ?, image_key = ?, detail_link = ?, link1_label = ?, link1_url = ?, link2_label = ?, link2_url = ?, link3_label = ?, link3_url = ?, youtube_url = ?, instagram_url = ? WHERE id = ?`
+    `UPDATE products SET title = ?, image_key = ?, detail_link = ?, link1_label = ?, link1_url = ?, link2_label = ?, link2_url = ?, link3_label = ?, link3_url = ?, youtube_url = ?, instagram_url = ?, threads_embed_html = ? WHERE id = ?`
   ).bind(
     title, key, detailLink,
     links[0].label || null, links[0].url || null,
     links[1].label || null, links[1].url || null,
     links[2].label || null, links[2].url || null,
-    youtubeUrl || null, instagramUrl || null,
+    youtubeUrl || null, instagramUrl || null, threadsEmbedHtml || null,
     id
   ).run();
 
