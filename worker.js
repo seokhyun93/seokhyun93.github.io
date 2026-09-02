@@ -196,12 +196,14 @@ function imageModeFieldsHtml(urlMode) {
 }
 
 function linkFieldsHtml(n, label, links) {
-  const l = links[n - 1] || { label: '', url: '' };
+  const l = links[n - 1];
+  const labelValue = (l && l.label) ? l.label : label;
+  const urlValue = l ? l.url : '';
   return `
     <label>링크 ${n}</label>
     <div class="link-row">
-      <input type="text" name="link${n}_label" placeholder="예: ${label}" value="${esc(l.label)}">
-      <input type="url" name="link${n}_url" placeholder="https://..." value="${esc(l.url)}">
+      <input type="text" name="link${n}_label" value="${esc(labelValue)}">
+      <input type="url" name="link${n}_url" placeholder="https://... (없으면 비워두세요)" value="${esc(urlValue)}">
     </div>`;
 }
 
