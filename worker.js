@@ -207,24 +207,23 @@ function linkFieldsHtml(n, label, links) {
     </div>`;
 }
 
-function adminPage(recentRows, successParam) {
-  const rows = recentRows.map((r) => `
-    <tr>
-      <td>${esc(r.title)}</td>
-      <td>${r.clicks}</td>
-      <td>${new Date(r.created_at).toLocaleDateString('ko-KR')}</td>
-      <td><a href="/admin/edit/${r.id}">수정</a></td>
-    </tr>`).join('');
+function navHtml(active) {
+  const tab = (href, text, key) => `<a href="${href}"${active === key ? ' class="active"' : ''}>${text}</a>`;
+  return `
+    <div class="nav">
+      ${tab('/admin', '업로드', 'upload')}
+      ${tab('/admin/products', '최근 업로드', 'products')}
+      ${tab('/admin/stats', '클릭 통계', 'stats')}
+      <form method="POST" action="/admin/logout" style="margin-left:auto;">
+        <button type="submit" class="secondary">로그아웃</button>
+      </form>
+    </div>`;
+}
 
+function adminPage(successParam) {
   return page('상품 업로드', `
     <div class="wrap">
-      <div class="nav">
-        <a href="/admin" class="active">업로드</a>
-        <a href="/admin/stats">클릭 통계</a>
-        <form method="POST" action="/admin/logout" style="margin-left:auto;">
-          <button type="submit" class="secondary">로그아웃</button>
-        </form>
-      </div>
+      ${navHtml('upload')}
       <h1>새 상품 업로드</h1>
       ${successParam === '1' ? '<div class="success">업로드되었습니다.</div>' : ''}
       ${successParam === 'missing' ? '<div class="error" style="margin-bottom:16px;">제목, 이미지, 상세페이지 링크는 필수입니다.</div>' : ''}
@@ -244,27 +243,36 @@ function adminPage(recentRows, successParam) {
 
         <button type="submit">업로드</button>
       </form>
-
-      <h1 style="margin-top:48px;">최근 업로드</h1>
-      <table>
-        <thead><tr><th>상품명</th><th>클릭수</th><th>등록일</th><th></th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="4" style="color:#bbb;">아직 업로드된 상품이 없습니다.</td></tr>'}</tbody>
-      </table>
     </div>
   `, imageFormScript(true));
+}
+
+function productsPage(rows) {
+  const body = rows.map((r) => `
+    <tr>
+      <td>${esc(r.title)}</td>
+      <td>${r.clicks}</td>
+      <td>${new Date(r.created_at).toLocaleDateString('ko-KR')}</td>
+      <td><a href="/admin/edit/${r.id}">수정</a></td>
+    </tr>`).join('');
+
+  return page('최근 업로드', `
+    <div class="wrap">
+      ${navHtml('products')}
+      <h1>최근 업로드</h1>
+      <table>
+        <thead><tr><th>상품명</th><th>클릭수</th><th>등록일</th><th></th></tr></thead>
+        <tbody>${body || '<tr><td colspan="4" style="color:#bbb;">아직 업로드된 상품이 없습니다.</td></tr>'}</tbody>
+      </table>
+    </div>
+  `);
 }
 
 function editPage(product, errorParam) {
   const urlMode = /^https?:\/\//.test(product.image) ? product.image : null;
   return page('상품 수정', `
     <div class="wrap">
-      <div class="nav">
-        <a href="/admin">업로드</a>
-        <a href="/admin/stats">클릭 통계</a>
-        <form method="POST" action="/admin/logout" style="margin-left:auto;">
-          <button type="submit" class="secondary">로그아웃</button>
-        </form>
-      </div>
+      ${navHtml('products')}
       <h1>상품 수정</h1>
       ${errorParam === 'missing' ? '<div class="error" style="margin-bottom:16px;">상품명과 상세페이지 링크는 필수입니다.</div>' : ''}
       <img class="thumb" src="${esc(product.image)}" alt="" referrerpolicy="no-referrer" style="width:64px;height:64px;margin-bottom:8px;">
@@ -299,13 +307,7 @@ function statsPage(products) {
 
   return page('클릭 통계', `
     <div class="wrap">
-      <div class="nav">
-        <a href="/admin">업로드</a>
-        <a href="/admin/stats" class="active">클릭 통계</a>
-        <form method="POST" action="/admin/logout" style="margin-left:auto;">
-          <button type="submit" class="secondary">로그아웃</button>
-        </form>
-      </div>
+      ${navHtml('stats')}
       <h1>클릭 통계 (클릭 많은 순)</h1>
       <table>
         <thead><tr><th></th><th>상품명</th><th>클릭수</th><th>등록일</th></tr></thead>
@@ -319,9 +321,16 @@ async function handleAdminHome(request, env, url) {
   if (!(await isAuthed(request, env))) {
     return htmlResponse(loginPage(url.searchParams.get('error')));
   }
+  return htmlResponse(adminPage(url.searchParams.get('success')));
+}
+
+async function handleProductsPage(request, env) {
+  if (!(await isAuthed(request, env))) {
+    return htmlResponse(loginPage(null));
+  }
   await ensureSchema(env);
-  const { results } = await env.DB.prepare('SELECT id, title, clicks, created_at FROM products ORDER BY created_at DESC LIMIT 20').all();
-  return htmlResponse(adminPage(results, url.searchParams.get('success')));
+  const { results } = await env.DB.prepare('SELECT id, title, clicks, created_at FROM products ORDER BY created_at DESC LIMIT 200').all();
+  return htmlResponse(productsPage(results));
 }
 
 async function handleStats(request, env) {
@@ -506,6 +515,7 @@ export default {
       if (path === '/admin/logout' && request.method === 'POST') return handleLogout();
       if (path === '/admin/upload' && request.method === 'POST') return handleUpload(request, env);
       if (path === '/admin/stats' && request.method === 'GET') return handleStats(request, env);
+      if (path === '/admin/products' && request.method === 'GET') return handleProductsPage(request, env);
       if (path.startsWith('/admin/edit/') && request.method === 'GET') {
         return handleEditPage(request, env, parseInt(path.slice('/admin/edit/'.length), 10));
       }
