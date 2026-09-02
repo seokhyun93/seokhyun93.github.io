@@ -28,7 +28,6 @@ const popularRow = document.getElementById('popularRow');
 const gridEl = document.getElementById('productGrid');
 const pagerEl = document.getElementById('pager');
 const searchResultEl = document.getElementById('searchResult');
-const normalSectionsEl = document.getElementById('normalSections');
 const searchInput = document.getElementById('searchInput');
 
 async function loadPopular() {
@@ -63,13 +62,12 @@ searchInput.addEventListener('input', () => {
 
 async function runSearch(q) {
   if (!q) {
-    normalSectionsEl.style.display = '';
     searchResultEl.style.display = 'none';
+    searchResultEl.innerHTML = '';
     return;
   }
   const res = await fetch('/api/products?q=' + encodeURIComponent(q));
   const data = await res.json();
-  normalSectionsEl.style.display = 'none';
   searchResultEl.style.display = '';
   if (data.items.length === 0) {
     searchResultEl.innerHTML = '<div class="empty">검색 결과가 없습니다.</div>';
@@ -83,22 +81,23 @@ async function runSearch(q) {
 async function showProduct(id) {
   const res = await fetch('/api/products?id=' + encodeURIComponent(id));
   const data = await res.json();
-  normalSectionsEl.style.display = 'none';
   searchResultEl.style.display = '';
-  searchResultEl.innerHTML = data.items.length
-    ? `<div class="grid">${data.items.map(cardHtml).join('')}</div>`
-    : '<div class="empty">상품을 찾을 수 없습니다.</div>';
+  if (data.items.length) {
+    searchInput.value = data.items[0].title;
+    searchResultEl.innerHTML = `<div class="grid">${data.items.map(cardHtml).join('')}</div>`;
+  } else {
+    searchResultEl.innerHTML = '<div class="empty">상품을 찾을 수 없습니다.</div>';
+  }
 }
 
 const initialParams = new URLSearchParams(location.search);
 const initialId = initialParams.get('p');
 const initialQuery = initialParams.get('q');
+loadPopular();
+loadPage(1);
 if (initialId) {
   showProduct(initialId);
 } else if (initialQuery) {
   searchInput.value = initialQuery;
   runSearch(initialQuery.trim());
-} else {
-  loadPopular();
-  loadPage(1);
 }
