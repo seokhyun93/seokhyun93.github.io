@@ -13,4 +13,4 @@ bucket_name = "shop-images"
 [[d1_databases]]
 binding = "DB"
 database_name = "shop"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "e6f429eb-ba22-4021-af73-fc6673c44c48"
