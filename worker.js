@@ -100,6 +100,9 @@ function baseStyle() {
     .image-mode { display:flex; gap:16px; margin-top:4px; }
     .radio-inline { display:flex !important; align-items:center; gap:5px; font-size:12.5px; color:#333; margin:0 !important; cursor:pointer; }
     .radio-inline input { width:auto; }
+    .pager { display:flex; justify-content:center; align-items:center; gap:16px; margin-top:24px; font-size:12.5px; color:#666; }
+    .pager-btn { font-family:inherit; font-size:12px; padding:6px 14px; border:1px solid #eee; background:#fff; border-radius:999px; color:#141414; text-decoration:none; display:inline-block; }
+    .pager-btn.disabled { color:#ccc; border-color:#f5f5f5; }
   `;
 }
 
@@ -247,7 +250,19 @@ function adminPage(successParam) {
   `, imageFormScript(true));
 }
 
-function productsPage(rows) {
+function adminPagerHtml(basePath, page, totalPages) {
+  const link = (p, label, disabled) => disabled
+    ? `<span class="pager-btn disabled">${label}</span>`
+    : `<a class="pager-btn" href="${basePath}?page=${p}">${label}</a>`;
+  return `
+    <div class="pager">
+      ${link(page - 1, '이전', page <= 1)}
+      <span>${page} / ${totalPages}</span>
+      ${link(page + 1, '다음', page >= totalPages)}
+    </div>`;
+}
+
+function productsPage(rows, pageNum, totalPages) {
   const body = rows.map((r) => `
     <tr>
       <td>${esc(r.title)}</td>
@@ -264,6 +279,7 @@ function productsPage(rows) {
         <thead><tr><th>상품명</th><th>클릭수</th><th>등록일</th><th></th></tr></thead>
         <tbody>${body || '<tr><td colspan="4" style="color:#bbb;">아직 업로드된 상품이 없습니다.</td></tr>'}</tbody>
       </table>
+      ${rows.length ? adminPagerHtml('/admin/products', pageNum, totalPages) : ''}
     </div>
   `);
 }
@@ -324,13 +340,17 @@ async function handleAdminHome(request, env, url) {
   return htmlResponse(adminPage(url.searchParams.get('success')));
 }
 
-async function handleProductsPage(request, env) {
+async function handleProductsPage(request, env, url) {
   if (!(await isAuthed(request, env))) {
     return htmlResponse(loginPage(null));
   }
   await ensureSchema(env);
-  const { results } = await env.DB.prepare('SELECT id, title, clicks, created_at FROM products ORDER BY created_at DESC LIMIT 200').all();
-  return htmlResponse(productsPage(results));
+  const pageNum = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10) || 1);
+  const offset = (pageNum - 1) * PAGE_SIZE;
+  const { results } = await env.DB.prepare('SELECT id, title, clicks, created_at FROM products ORDER BY created_at DESC LIMIT ? OFFSET ?').bind(PAGE_SIZE, offset).all();
+  const countRow = await env.DB.prepare('SELECT COUNT(*) as total FROM products').first();
+  const totalPages = Math.max(1, Math.ceil(countRow.total / PAGE_SIZE));
+  return htmlResponse(productsPage(results, pageNum, totalPages));
 }
 
 async function handleStats(request, env) {
@@ -515,7 +535,7 @@ export default {
       if (path === '/admin/logout' && request.method === 'POST') return handleLogout();
       if (path === '/admin/upload' && request.method === 'POST') return handleUpload(request, env);
       if (path === '/admin/stats' && request.method === 'GET') return handleStats(request, env);
-      if (path === '/admin/products' && request.method === 'GET') return handleProductsPage(request, env);
+      if (path === '/admin/products' && request.method === 'GET') return handleProductsPage(request, env, url);
       if (path.startsWith('/admin/edit/') && request.method === 'GET') {
         return handleEditPage(request, env, parseInt(path.slice('/admin/edit/'.length), 10));
       }
