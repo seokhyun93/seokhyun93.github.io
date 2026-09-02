@@ -9,7 +9,20 @@ async function ensureSchema(env) {
   await env.DB.prepare(
     'CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, image_key TEXT NOT NULL, detail_link TEXT NOT NULL, link1_label TEXT, link1_url TEXT, link2_label TEXT, link2_url TEXT, link3_label TEXT, link3_url TEXT, clicks INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)'
   ).run();
+  for (const col of ['youtube_url TEXT', 'instagram_url TEXT']) {
+    try {
+      await env.DB.prepare(`ALTER TABLE products ADD COLUMN ${col}`).run();
+    } catch (e) {
+      // column already exists
+    }
+  }
   schemaReady = true;
+}
+
+function youtubeEmbedUrl(url) {
+  if (!url) return null;
+  const m = url.match(/(?:youtube\.com\/(?:watch\?v=|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+  return m ? `https://www.youtube.com/embed/${m[1]}` : null;
 }
 
 function esc(s) {
@@ -67,6 +80,9 @@ function normalizeRow(r) {
     links,
     clicks: r.clicks,
     createdAt: r.created_at,
+    youtubeUrl: r.youtube_url || null,
+    youtubeEmbed: youtubeEmbedUrl(r.youtube_url),
+    instagramUrl: r.instagram_url || null,
   };
 }
 
@@ -246,6 +262,12 @@ function adminPage(successParam) {
         ${linkFieldsHtml(2, '네이버', [])}
         ${linkFieldsHtml(3, '쿠팡', [])}
 
+        <label>유튜브 영상 링크 (선택)</label>
+        <input type="url" name="youtube_url" placeholder="https://youtube.com/watch?v=...">
+
+        <label>인스타그램 게시물 링크 (선택)</label>
+        <input type="url" name="instagram_url" placeholder="https://instagram.com/p/...">
+
         <button type="submit">업로드</button>
       </form>
     </div>
@@ -320,6 +342,12 @@ function editPage(product, errorParam) {
         ${linkFieldsHtml(1, '토스', product.links)}
         ${linkFieldsHtml(2, '네이버', product.links)}
         ${linkFieldsHtml(3, '쿠팡', product.links)}
+
+        <label>유튜브 영상 링크 (선택)</label>
+        <input type="url" name="youtube_url" value="${esc(product.youtubeUrl || '')}" placeholder="https://youtube.com/watch?v=...">
+
+        <label>인스타그램 게시물 링크 (선택)</label>
+        <input type="url" name="instagram_url" value="${esc(product.instagramUrl || '')}" placeholder="https://instagram.com/p/...">
 
         <button type="submit">저장</button>
       </form>
@@ -440,20 +468,23 @@ async function handleUpload(request, env) {
   }
 
   const links = readLinkFields(form);
-  await insertProduct(env, { title, key, detailLink, links });
+  const youtubeUrl = (form.get('youtube_url') || '').toString().trim();
+  const instagramUrl = (form.get('instagram_url') || '').toString().trim();
+  await insertProduct(env, { title, key, detailLink, links, youtubeUrl, instagramUrl });
 
   return new Response(null, { status: 303, headers: { Location: '/admin?success=1' } });
 }
 
-async function insertProduct(env, { title, key, detailLink, links }) {
+async function insertProduct(env, { title, key, detailLink, links, youtubeUrl, instagramUrl }) {
   await env.DB.prepare(
-    `INSERT INTO products (title, image_key, detail_link, link1_label, link1_url, link2_label, link2_url, link3_label, link3_url, clicks, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`
+    `INSERT INTO products (title, image_key, detail_link, link1_label, link1_url, link2_label, link2_url, link3_label, link3_url, youtube_url, instagram_url, clicks, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`
   ).bind(
     title, key, detailLink,
     links[0]?.label || null, links[0]?.url || null,
     links[1]?.label || null, links[1]?.url || null,
     links[2]?.label || null, links[2]?.url || null,
+    youtubeUrl || null, instagramUrl || null,
     Date.now()
   ).run();
 }
@@ -482,7 +513,9 @@ async function handleApiUpload(request, env) {
     return jsonResponse({ error: 'title, detail_link, image_url are required' }, 400);
   }
 
-  await insertProduct(env, { title, key: imageUrl, detailLink, links });
+  const youtubeUrl = (body.youtube_url || '').toString().trim();
+  const instagramUrl = (body.instagram_url || '').toString().trim();
+  await insertProduct(env, { title, key: imageUrl, detailLink, links, youtubeUrl, instagramUrl });
   return jsonResponse({ ok: true });
 }
 
@@ -513,14 +546,17 @@ async function handleEditSubmit(request, env, id) {
   const newKey = await resolveImageKey(env, form);
   const key = newKey || existing.image_key;
   const links = readLinkFields(form);
+  const youtubeUrl = (form.get('youtube_url') || '').toString().trim();
+  const instagramUrl = (form.get('instagram_url') || '').toString().trim();
 
   await env.DB.prepare(
-    `UPDATE products SET title = ?, image_key = ?, detail_link = ?, link1_label = ?, link1_url = ?, link2_label = ?, link2_url = ?, link3_label = ?, link3_url = ? WHERE id = ?`
+    `UPDATE products SET title = ?, image_key = ?, detail_link = ?, link1_label = ?, link1_url = ?, link2_label = ?, link2_url = ?, link3_label = ?, link3_url = ?, youtube_url = ?, instagram_url = ? WHERE id = ?`
   ).bind(
     title, key, detailLink,
     links[0].label || null, links[0].url || null,
     links[1].label || null, links[1].url || null,
     links[2].label || null, links[2].url || null,
+    youtubeUrl || null, instagramUrl || null,
     id
   ).run();
 
