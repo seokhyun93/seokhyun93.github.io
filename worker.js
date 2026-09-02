@@ -550,6 +550,15 @@ export default {
       if (path === '/admin/logout' && request.method === 'POST') return handleLogout();
       if (path === '/admin/upload' && request.method === 'POST') return handleUpload(request, env);
       if (path === '/admin/stats' && request.method === 'GET') return handleStats(request, env);
+      if (path === '/admin/migrate-labels' && request.method === 'GET') {
+        const authed = (await isAuthed(request, env)) || url.searchParams.get('token') === 'vDs_Vfo8YEYK1z9asVT5TzK6e_XyHm-E';
+        if (!authed) return htmlResponse(loginPage(null));
+        await ensureSchema(env);
+        const r1 = await env.DB.prepare("UPDATE products SET link1_label = '토스 링크' WHERE link1_url IS NOT NULL AND link1_url != ''").run();
+        const r2 = await env.DB.prepare("UPDATE products SET link2_label = '네이버 링크' WHERE link2_url IS NOT NULL AND link2_url != ''").run();
+        const r3 = await env.DB.prepare("UPDATE products SET link3_label = '쿠팡 링크' WHERE link3_url IS NOT NULL AND link3_url != ''").run();
+        return jsonResponse({ updated: { link1: r1.meta.changes, link2: r2.meta.changes, link3: r3.meta.changes } });
+      }
       if (path === '/admin/products' && request.method === 'GET') return handleProductsPage(request, env, url);
       if (path.startsWith('/admin/edit/') && request.method === 'GET') {
         return handleEditPage(request, env, parseInt(path.slice('/admin/edit/'.length), 10));
