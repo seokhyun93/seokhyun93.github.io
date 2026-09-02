@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>상품 모음</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    background: #fce7db;
+    color: #222;
+  }
+  .disclaimer {
+    background: #f6d0b3;
+    padding: 12px 20px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #6b5544;
+    text-align: center;
+  }
+  main {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 28px 20px 60px;
+  }
+  .profile {
+    text-align: center;
+    margin-bottom: 24px;
+  }
+  .profile img {
+    width: 96px;
+    height: 96px;
+    border-radius: 50%;
+    object-fit: cover;
+    background: #eee;
+    border: 3px solid #fff;
+  }
+  .profile .username {
+    margin-top: 12px;
+    font-size: 17px;
+    font-weight: 700;
+  }
+  .profile .bio {
+    margin-top: 4px;
+    font-size: 14px;
+    color: #555;
+  }
+  .search-box {
+    position: relative;
+    margin-bottom: 32px;
+  }
+  .search-box input {
+    width: 100%;
+    padding: 13px 46px 13px 18px;
+    font-size: 14px;
+    border: none;
+    border-radius: 12px;
+    outline: none;
+    background: #fff;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  }
+  .search-box .icon {
+    position: absolute;
+    right: 16px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #999;
+    pointer-events: none;
+  }
+  .category {
+    margin-bottom: 28px;
+  }
+  .category-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 12px;
+  }
+  .category-header .title {
+    font-size: 15px;
+    font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-right: 12px;
+  }
+  .category-header .toggle {
+    font-size: 12px;
+    color: #888;
+    white-space: nowrap;
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 0;
+  }
+  .row {
+    display: flex;
+    gap: 12px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    scrollbar-width: none;
+  }
+  .row::-webkit-scrollbar { display: none; }
+  .row.expanded {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+  .card {
+    flex: 0 0 140px;
+    display: block;
+    text-decoration: none;
+    color: inherit;
+    background: #fff;
+    border: 1px solid #eee;
+    border-radius: 14px;
+    overflow: hidden;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+  .row.expanded .card {
+    flex: 0 0 calc(33.333% - 8px);
+  }
+  .card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 14px rgba(0,0,0,0.08);
+  }
+  .card img {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    object-fit: cover;
+    background: #f0f0f0;
+    display: block;
+  }
+  .card .title {
+    padding: 8px 10px 10px;
+    font-size: 12.5px;
+    font-weight: 600;
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .empty {
+    text-align: center;
+    color: #999;
+    padding: 60px 0;
+  }
+  .result-title {
+    font-size: 14px;
+    font-weight: 700;
+    margin-bottom: 12px;
+    color: #555;
+  }
+</style>
+</head>
+<body>
+
+<div class="disclaimer" id="disclaimer"></div>
+
+<main>
+  <div class="profile">
+    <img id="avatarImg" src="" alt="">
+    <div class="username" id="usernameEl"></div>
+    <div class="bio" id="bioEl"></div>
+  </div>
+
+  <div class="search-box">
+    <input type="text" id="searchInput" placeholder="상품을 검색해 보세요">
+    <span class="icon">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    </span>
+  </div>
+
+  <div id="categoryContainer"></div>
+  <div id="searchResult" style="display:none;"></div>
+</main>
+
+<script src="data.js"></script>
+<script>
+  const DEFAULT_DISCLAIMER = "쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다. 상품 목록 및 상품에 대한 설명은 운영자가 직접 구성하고 작성한 것으로, 이에 대한 모든 책임은 운영자에게 있습니다.";
+  const FALLBACK_IMG = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><rect width='140' height='140' fill='%23f0f0f0'/></svg>";
+  const FALLBACK_AVATAR = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96"><rect width="96" height="96" fill="%23eee"/></svg>';
+
+  document.getElementById('disclaimer').textContent = (typeof disclaimer === 'string' && disclaimer) ? disclaimer : DEFAULT_DISCLAIMER;
+  const avatarEl = document.getElementById('avatarImg');
+  avatarEl.src = profile.avatar;
+  avatarEl.onerror = function () { avatarEl.onerror = null; avatarEl.src = FALLBACK_AVATAR; };
+  document.getElementById('usernameEl').textContent = profile.username;
+  document.getElementById('bioEl').textContent = profile.bio;
+
+  function handleImgError(el) {
+    el.onerror = null;
+    el.src = FALLBACK_IMG;
+  }
+
+  function cardHtml(item) {
+    return `
+      <a class="card" href="${item.link}" target="_blank" rel="noopener noreferrer">
+        <img src="${item.image}" alt="" onerror="handleImgError(this)">
+        <div class="title">${item.title}</div>
+      </a>`;
+  }
+
+  const categoryContainer = document.getElementById('categoryContainer');
+
+  categories.forEach((cat, idx) => {
+    const section = document.createElement('div');
+    section.className = 'category';
+    section.innerHTML = `
+      <div class="category-header">
+        <div class="title">${cat.title}</div>
+        <button class="toggle" data-idx="${idx}">펼쳐보기</button>
+      </div>
+      <div class="row" id="row-${idx}">
+        ${cat.items.map(cardHtml).join('')}
+      </div>`;
+    categoryContainer.appendChild(section);
+  });
+
+  categoryContainer.addEventListener('click', (e) => {
+    if (!e.target.classList.contains('toggle')) return;
+    const idx = e.target.dataset.idx;
+    const row = document.getElementById('row-' + idx);
+    const expanded = row.classList.toggle('expanded');
+    e.target.textContent = expanded ? '접기' : '펼쳐보기';
+  });
+
+  const searchInput = document.getElementById('searchInput');
+  const searchResult = document.getElementById('searchResult');
+
+  searchInput.addEventListener('input', () => {
+    const q = searchInput.value.trim().toLowerCase();
+    if (!q) {
+      categoryContainer.style.display = '';
+      searchResult.style.display = 'none';
+      return;
+    }
+    const matches = categories.flatMap(c => c.items).filter(item => item.title.toLowerCase().includes(q));
+    categoryContainer.style.display = 'none';
+    searchResult.style.display = '';
+    if (matches.length === 0) {
+      searchResult.innerHTML = `<div class="empty">검색 결과가 없습니다.</div>`;
+    } else {
+      searchResult.innerHTML = `
+        <div class="result-title">검색 결과 (${matches.length})</div>
+        <div class="row expanded">${matches.map(cardHtml).join('')}</div>`;
+    }
+  });
+</script>
+
+</body>
+</html>
