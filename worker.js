@@ -97,6 +97,7 @@ function baseStyle() {
     .thumb { width:36px; height:36px; object-fit:cover; border-radius:4px; background:#fafafa; border:1px solid #f0f0f0; }
     .link-row { display:flex; gap:8px; }
     .link-row input { flex:1; }
+    .link-label-fixed { flex:1; padding:10px 12px; font-size:14px; border:1px solid #eee; border-radius:6px; background:#fafafa; color:#666; }
     .image-mode { display:flex; gap:16px; margin-top:4px; }
     .radio-inline { display:flex !important; align-items:center; gap:5px; font-size:12.5px; color:#333; margin:0 !important; cursor:pointer; }
     .radio-inline input { width:auto; }
@@ -200,12 +201,13 @@ function imageModeFieldsHtml(urlMode) {
 
 function linkFieldsHtml(n, label, links) {
   const l = links[n - 1];
-  const labelValue = (l && l.label) ? l.label : label;
+  const labelValue = `${label} 링크`;
   const urlValue = l ? l.url : '';
   return `
     <label>링크 ${n}</label>
     <div class="link-row">
-      <input type="text" name="link${n}_label" value="${esc(labelValue)}">
+      <div class="link-label-fixed">${esc(labelValue)}</div>
+      <input type="hidden" name="link${n}_label" value="${esc(labelValue)}">
       <input type="url" name="link${n}_url" placeholder="https://... (없으면 비워두세요)" value="${esc(urlValue)}">
     </div>`;
 }
