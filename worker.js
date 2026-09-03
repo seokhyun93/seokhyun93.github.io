@@ -93,7 +93,7 @@ function baseStyle() {
     * { box-sizing: border-box; }
     body { margin:0; font-family:'Noto Sans KR',-apple-system,'Apple SD Gothic Neo','Malgun Gothic',sans-serif; background:#fff; color:#141414; }
     a { color:inherit; }
-    .wrap { max-width: 640px; margin: 0 auto; padding: 48px 24px 80px; }
+    .wrap { max-width: 1000px; margin: 0 auto; padding: 48px 24px 80px; }
     h1 { font-size:16px; font-weight:700; margin:0 0 24px; }
     label { display:block; font-size:12px; color:#666; margin:16px 0 6px; }
     input[type=text], input[type=url], input[type=password], textarea {
