@@ -28,7 +28,8 @@ const todayDealCategory = document.getElementById('todayDealCategory');
 const todayDealRow = document.getElementById('todayDealRow');
 const popularRow = document.getElementById('popularRow');
 const gridEl = document.getElementById('productGrid');
-const pagerEl = document.getElementById('pager');
+const gridSentinel = document.getElementById('gridSentinel');
+const gridStatus = document.getElementById('gridStatus');
 const searchResultEl = document.getElementById('searchResult');
 const searchInput = document.getElementById('searchInput');
 
@@ -47,23 +48,34 @@ async function loadPopular() {
   popularRow.innerHTML = data.items.map(cardHtml).join('') || '<div class="empty">등록된 상품이 없습니다.</div>';
 }
 
-async function loadPage(page) {
-  const res = await fetch(`/api/products?section=all&page=${page}`);
+let gridPage = 1;
+let gridLoading = false;
+let gridHasMore = true;
+
+async function loadMoreProducts() {
+  if (gridLoading || !gridHasMore) return;
+  gridLoading = true;
+  gridStatus.textContent = '불러오는 중...';
+
+  const res = await fetch(`/api/products?section=all&page=${gridPage}`);
   const data = await res.json();
-  gridEl.innerHTML = data.items.map(cardHtml).join('') || '<div class="empty">등록된 상품이 없습니다.</div>';
-  const totalPages = Math.max(1, Math.ceil(data.total / data.pageSize));
-  pagerEl.innerHTML = `
-    <button ${page <= 1 ? 'disabled' : ''} data-page="${page - 1}">이전</button>
-    <span>${page} / ${totalPages}</span>
-    <button ${page >= totalPages ? 'disabled' : ''} data-page="${page + 1}">다음</button>`;
+
+  if (gridPage === 1 && data.items.length === 0) {
+    gridEl.innerHTML = '<div class="empty">등록된 상품이 없습니다.</div>';
+  } else {
+    gridEl.insertAdjacentHTML('beforeend', data.items.map(cardHtml).join(''));
+  }
+
+  gridPage += 1;
+  gridHasMore = gridPage <= Math.ceil(data.total / data.pageSize);
+  gridStatus.textContent = '';
+  gridLoading = false;
 }
 
-pagerEl.addEventListener('click', (e) => {
-  const btn = e.target.closest('button[data-page]');
-  if (!btn || btn.disabled) return;
-  loadPage(Number(btn.dataset.page));
-  window.scrollTo({ top: gridEl.offsetTop - 20, behavior: 'smooth' });
-});
+const gridObserver = new IntersectionObserver((entries) => {
+  if (entries[0].isIntersecting) loadMoreProducts();
+}, { rootMargin: '400px' });
+gridObserver.observe(gridSentinel);
 
 let searchTimer = null;
 searchInput.addEventListener('input', () => {
@@ -137,7 +149,7 @@ const initialId = initialParams.get('p');
 const initialQuery = initialParams.get('q');
 loadTodayDeal();
 loadPopular();
-loadPage(1);
+loadMoreProducts();
 if (initialId) {
   showProduct(initialId);
 } else if (initialQuery) {
