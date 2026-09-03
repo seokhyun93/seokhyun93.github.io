@@ -640,7 +640,9 @@ async function handleListProducts(env, url) {
   const section = url.searchParams.get('section') || 'all';
 
   if (section === 'popular') {
-    const { results } = await env.DB.prepare('SELECT * FROM products ORDER BY clicks DESC, created_at DESC LIMIT 10').all();
+    const { results } = await env.DB.prepare(
+      "SELECT * FROM products ORDER BY (category = 'today_deal') ASC, created_at DESC LIMIT 10"
+    ).all();
     return jsonResponse({ items: results.map(normalizeRow) });
   }
 
@@ -653,7 +655,9 @@ async function handleListProducts(env, url) {
 
   const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10) || 1);
   const offset = (page - 1) * PAGE_SIZE;
-  const { results } = await env.DB.prepare('SELECT * FROM products ORDER BY created_at DESC LIMIT ? OFFSET ?').bind(PAGE_SIZE, offset).all();
+  const { results } = await env.DB.prepare(
+    "SELECT * FROM products ORDER BY (category = 'today_deal') ASC, created_at DESC LIMIT ? OFFSET ?"
+  ).bind(PAGE_SIZE, offset).all();
   const countRow = await env.DB.prepare('SELECT COUNT(*) as total FROM products').first();
   return jsonResponse({ items: results.map(normalizeRow), total: countRow.total, page, pageSize: PAGE_SIZE });
 }
