@@ -9,7 +9,7 @@ async function ensureSchema(env) {
   await env.DB.prepare(
     'CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, image_key TEXT NOT NULL, detail_link TEXT NOT NULL, link1_label TEXT, link1_url TEXT, link2_label TEXT, link2_url TEXT, link3_label TEXT, link3_url TEXT, clicks INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)'
   ).run();
-  for (const col of ['youtube_url TEXT', 'instagram_url TEXT', 'threads_embed_html TEXT']) {
+  for (const col of ['youtube_url TEXT', 'instagram_url TEXT', 'threads_embed_html TEXT', 'category TEXT']) {
     try {
       await env.DB.prepare(`ALTER TABLE products ADD COLUMN ${col}`).run();
     } catch (e) {
@@ -84,6 +84,7 @@ function normalizeRow(r) {
     youtubeEmbed: youtubeEmbedUrl(r.youtube_url),
     instagramUrl: r.instagram_url || null,
     threadsEmbedHtml: r.threads_embed_html || null,
+    category: r.category || null,
   };
 }
 
@@ -484,24 +485,28 @@ async function handleUpload(request, env) {
   return new Response(null, { status: 303, headers: { Location: '/admin?success=1' } });
 }
 
-async function insertProduct(env, { title, key, detailLink, links, youtubeUrl, instagramUrl, threadsEmbedHtml }) {
+async function insertProduct(env, { title, key, detailLink, links, youtubeUrl, instagramUrl, threadsEmbedHtml, category }) {
   await env.DB.prepare(
-    `INSERT INTO products (title, image_key, detail_link, link1_label, link1_url, link2_label, link2_url, link3_label, link3_url, youtube_url, instagram_url, threads_embed_html, clicks, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`
+    `INSERT INTO products (title, image_key, detail_link, link1_label, link1_url, link2_label, link2_url, link3_label, link3_url, youtube_url, instagram_url, threads_embed_html, category, clicks, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`
   ).bind(
     title, key, detailLink,
     links[0]?.label || null, links[0]?.url || null,
     links[1]?.label || null, links[1]?.url || null,
     links[2]?.label || null, links[2]?.url || null,
-    youtubeUrl || null, instagramUrl || null, threadsEmbedHtml || null,
+    youtubeUrl || null, instagramUrl || null, threadsEmbedHtml || null, category || null,
     Date.now()
   ).run();
 }
 
-async function handleApiUpload(request, env) {
+function checkApiToken(request, env) {
   const auth = request.headers.get('Authorization') || '';
   const token = auth.replace(/^Bearer\s+/i, '');
-  if (!env.API_TOKEN || token !== env.API_TOKEN) {
+  return !!env.API_TOKEN && token === env.API_TOKEN;
+}
+
+async function handleApiUpload(request, env) {
+  if (!checkApiToken(request, env)) {
     return jsonResponse({ error: 'unauthorized' }, 401);
   }
   await ensureSchema(env);
@@ -525,7 +530,49 @@ async function handleApiUpload(request, env) {
   const youtubeUrl = (body.youtube_url || '').toString().trim();
   const instagramUrl = (body.instagram_url || '').toString().trim();
   const threadsEmbedHtml = (body.threads_embed_html || '').toString().trim();
-  await insertProduct(env, { title, key: imageUrl, detailLink, links, youtubeUrl, instagramUrl, threadsEmbedHtml });
+  const category = (body.category || '').toString().trim();
+  await insertProduct(env, { title, key: imageUrl, detailLink, links, youtubeUrl, instagramUrl, threadsEmbedHtml, category });
+  return jsonResponse({ ok: true });
+}
+
+async function handleApiEdit(request, env, id) {
+  if (!checkApiToken(request, env)) {
+    return jsonResponse({ error: 'unauthorized' }, 401);
+  }
+  await ensureSchema(env);
+
+  const existing = await env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(id).first();
+  if (!existing) return jsonResponse({ error: 'not found' }, 404);
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: 'invalid json' }, 400);
+  }
+
+  const title = body.title !== undefined ? body.title.toString().trim() : existing.title;
+  const detailLink = body.detail_link !== undefined ? body.detail_link.toString().trim() : existing.detail_link;
+  const imageUrl = body.image_url !== undefined ? body.image_url.toString().trim() : null;
+  const key = imageUrl && /^https?:\/\//.test(imageUrl) ? imageUrl : existing.image_key;
+  const links = Array.isArray(body.links) ? body.links.slice(0, 3) : null;
+  const category = body.category !== undefined ? body.category.toString().trim() : existing.category;
+
+  const l1 = links ? links[0] : { label: existing.link1_label, url: existing.link1_url };
+  const l2 = links ? links[1] : { label: existing.link2_label, url: existing.link2_url };
+  const l3 = links ? links[2] : { label: existing.link3_label, url: existing.link3_url };
+
+  await env.DB.prepare(
+    `UPDATE products SET title = ?, image_key = ?, detail_link = ?, link1_label = ?, link1_url = ?, link2_label = ?, link2_url = ?, link3_label = ?, link3_url = ?, category = ? WHERE id = ?`
+  ).bind(
+    title, key, detailLink,
+    l1?.label || null, l1?.url || null,
+    l2?.label || null, l2?.url || null,
+    l3?.label || null, l3?.url || null,
+    category || null,
+    id
+  ).run();
+
   return jsonResponse({ ok: true });
 }
 
@@ -597,6 +644,13 @@ async function handleListProducts(env, url) {
     return jsonResponse({ items: results.map(normalizeRow) });
   }
 
+  if (section === 'category') {
+    const category = (url.searchParams.get('category') || '').trim();
+    if (!category) return jsonResponse({ items: [] });
+    const { results } = await env.DB.prepare('SELECT * FROM products WHERE category = ? ORDER BY created_at DESC LIMIT 20').bind(category).all();
+    return jsonResponse({ items: results.map(normalizeRow) });
+  }
+
   const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10) || 1);
   const offset = (page - 1) * PAGE_SIZE;
   const { results } = await env.DB.prepare('SELECT * FROM products ORDER BY created_at DESC LIMIT ? OFFSET ?').bind(PAGE_SIZE, offset).all();
@@ -645,6 +699,9 @@ export default {
 
       if (path === '/api/products' && request.method === 'GET') return handleListProducts(env, url);
       if (path === '/api/admin/products' && request.method === 'POST') return handleApiUpload(request, env);
+      if (path.startsWith('/api/admin/products/') && request.method === 'POST') {
+        return handleApiEdit(request, env, parseInt(path.slice('/api/admin/products/'.length), 10));
+      }
       if (path.startsWith('/api/click/') && request.method === 'POST') return handleClick(env, path);
 
       if (path.startsWith('/images/') && request.method === 'GET') return handleImage(env, path);

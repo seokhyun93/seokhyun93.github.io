@@ -24,11 +24,22 @@ document.addEventListener('click', (e) => {
   navigator.sendBeacon('/api/click/' + el.dataset.id);
 });
 
+const todayDealCategory = document.getElementById('todayDealCategory');
+const todayDealRow = document.getElementById('todayDealRow');
 const popularRow = document.getElementById('popularRow');
 const gridEl = document.getElementById('productGrid');
 const pagerEl = document.getElementById('pager');
 const searchResultEl = document.getElementById('searchResult');
 const searchInput = document.getElementById('searchInput');
+
+async function loadTodayDeal() {
+  const res = await fetch('/api/products?section=category&category=today_deal');
+  const data = await res.json();
+  if (data.items.length) {
+    todayDealCategory.style.display = '';
+    todayDealRow.innerHTML = data.items.map(cardHtml).join('');
+  }
+}
 
 async function loadPopular() {
   const res = await fetch('/api/products?section=popular');
@@ -124,6 +135,7 @@ async function showProduct(id) {
 const initialParams = new URLSearchParams(location.search);
 const initialId = initialParams.get('p');
 const initialQuery = initialParams.get('q');
+loadTodayDeal();
 loadPopular();
 loadPage(1);
 if (initialId) {
