@@ -933,6 +933,42 @@ async function getYoutubeAccessToken(env) {
   return data.access_token;
 }
 
+async function uploadVideoToYoutube(env, { videoBytes, contentType, title, description, privacyStatus }) {
+  const accessToken = await getYoutubeAccessToken(env);
+
+  const metadata = {
+    snippet: { title, description, categoryId: '22' },
+    status: { privacyStatus, selfDeclaredMadeForKids: false },
+  };
+
+  const boundary = 'youtubeupload' + crypto.randomUUID().replace(/-/g, '');
+  const encoder = new TextEncoder();
+  const head = encoder.encode(
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n--${boundary}\r\nContent-Type: ${contentType || 'video/mp4'}\r\n\r\n`
+  );
+  const tail = encoder.encode(`\r\n--${boundary}--`);
+  const body = new Uint8Array(head.length + videoBytes.length + tail.length);
+  body.set(head, 0);
+  body.set(videoBytes, head.length);
+  body.set(tail, head.length + videoBytes.length);
+
+  const uploadResp = await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=snippet,status', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Content-Type': `multipart/related; boundary=${boundary}`,
+    },
+    body,
+  });
+  const uploadData = await uploadResp.json();
+
+  if (!uploadResp.ok || !uploadData.id) {
+    throw new Error(uploadData?.error?.message || JSON.stringify(uploadData));
+  }
+
+  return uploadData.id;
+}
+
 async function handleYoutubeUploadPage(request, env, url) {
   if (!(await isAuthed(request, env))) return htmlResponse(loginPage(null));
   await ensureSchema(env);
@@ -959,48 +995,55 @@ async function handleYoutubeUpload(request, env) {
       });
     }
 
-    const accessToken = await getYoutubeAccessToken(env);
-
-    const metadata = {
-      snippet: { title, description, categoryId: '22' },
-      status: { privacyStatus, selfDeclaredMadeForKids: false },
-    };
-
-    const boundary = 'youtubeupload' + crypto.randomUUID().replace(/-/g, '');
-    const encoder = new TextEncoder();
     const videoBytes = new Uint8Array(await videoFile.arrayBuffer());
-    const head = encoder.encode(
-      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n--${boundary}\r\nContent-Type: ${videoFile.type || 'video/mp4'}\r\n\r\n`
-    );
-    const tail = encoder.encode(`\r\n--${boundary}--`);
-    const body = new Uint8Array(head.length + videoBytes.length + tail.length);
-    body.set(head, 0);
-    body.set(videoBytes, head.length);
-    body.set(tail, head.length + videoBytes.length);
-
-    const uploadResp = await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=snippet,status', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': `multipart/related; boundary=${boundary}`,
-      },
-      body,
+    const videoId = await uploadVideoToYoutube(env, {
+      videoBytes,
+      contentType: videoFile.type,
+      title,
+      description,
+      privacyStatus,
     });
-    const uploadData = await uploadResp.json();
-
-    if (!uploadResp.ok || !uploadData.id) {
-      throw new Error(uploadData?.error?.message || JSON.stringify(uploadData));
-    }
 
     return new Response(null, {
       status: 303,
-      headers: { Location: '/admin/youtube/upload?success=' + encodeURIComponent(uploadData.id) },
+      headers: { Location: '/admin/youtube/upload?success=' + encodeURIComponent(videoId) },
     });
   } catch (err) {
     return new Response(null, {
       status: 303,
       headers: { Location: '/admin/youtube/upload?error=' + encodeURIComponent(err && err.message ? err.message : String(err)) },
     });
+  }
+}
+
+async function handleApiYoutubeUpload(request, env) {
+  if (!checkApiToken(request, env)) return jsonResponse({ error: 'unauthorized' }, 401);
+  await ensureSchema(env);
+  try {
+    const form = await request.formData();
+    const videoFile = form.get('video');
+    const title = (form.get('title') || '').toString().trim();
+    const description = (form.get('description') || '').toString();
+    const privacyStatus = ['public', 'unlisted', 'private'].includes(form.get('privacy'))
+      ? form.get('privacy').toString()
+      : 'public';
+
+    if (!videoFile || typeof videoFile === 'string' || !title) {
+      return jsonResponse({ error: 'video and title are required' }, 400);
+    }
+
+    const videoBytes = new Uint8Array(await videoFile.arrayBuffer());
+    const videoId = await uploadVideoToYoutube(env, {
+      videoBytes,
+      contentType: videoFile.type,
+      title,
+      description,
+      privacyStatus,
+    });
+
+    return jsonResponse({ id: videoId, url: `https://www.youtube.com/watch?v=${videoId}` });
+  } catch (err) {
+    return jsonResponse({ error: err && err.message ? err.message : String(err) }, 500);
   }
 }
 
@@ -1033,6 +1076,7 @@ export default {
         return handleApiEdit(request, env, parseInt(path.slice('/api/admin/products/'.length), 10));
       }
       if (path.startsWith('/api/click/') && request.method === 'POST') return handleClick(env, path);
+      if (path === '/api/admin/youtube/upload' && request.method === 'POST') return handleApiYoutubeUpload(request, env);
       if (path === '/api/admin/run-daily-toss-update' && request.method === 'POST') {
         if (!checkApiToken(request, env)) return jsonResponse({ error: 'unauthorized' }, 401);
         const results = await runDailyTossUpdate(env);
