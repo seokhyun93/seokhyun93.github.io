@@ -1062,6 +1062,24 @@ const INSTAGRAM_SCOPES = 'instagram_business_basic,instagram_business_content_pu
 // 메타가 그래프 API 버전을 올리면(만료 에러 발생 시) 여기 숫자만 올리면 됩니다.
 const IG_API_VERSION = 'v21.0';
 
+async function handleInstagramDebug(request, env) {
+  if (!(await isAuthed(request, env))) return htmlResponse(loginPage(null));
+  return jsonResponse({
+    hasAppId: !!env.INSTAGRAM_APP_ID,
+    appIdLength: env.INSTAGRAM_APP_ID ? env.INSTAGRAM_APP_ID.length : 0,
+    appIdPreview: env.INSTAGRAM_APP_ID ? env.INSTAGRAM_APP_ID.slice(0, 4) + '...' : null,
+    hasAppSecret: !!env.INSTAGRAM_APP_SECRET,
+    appSecretLength: env.INSTAGRAM_APP_SECRET ? env.INSTAGRAM_APP_SECRET.length : 0,
+    authorizeUrl: `https://www.instagram.com/oauth/authorize?${new URLSearchParams({
+      client_id: env.INSTAGRAM_APP_ID || '',
+      redirect_uri: INSTAGRAM_REDIRECT_URI,
+      response_type: 'code',
+      scope: INSTAGRAM_SCOPES,
+      state: 'debug',
+    }).toString()}`,
+  });
+}
+
 async function handleInstagramConnect(request, env) {
   if (!(await isAuthed(request, env))) return htmlResponse(loginPage(null));
   const state = crypto.randomUUID();
@@ -1377,6 +1395,7 @@ export default {
       if (path === '/admin/youtube/callback' && request.method === 'GET') return handleYoutubeCallback(request, env, url);
       if (path === '/admin/youtube/upload' && request.method === 'GET') return handleYoutubeUploadPage(request, env, url);
       if (path === '/admin/youtube/upload' && request.method === 'POST') return handleYoutubeUpload(request, env);
+      if (path === '/admin/instagram/debug' && request.method === 'GET') return handleInstagramDebug(request, env);
       if (path === '/admin/instagram/connect' && request.method === 'GET') return handleInstagramConnect(request, env);
       if (path === '/admin/instagram/callback' && request.method === 'GET') return handleInstagramCallback(request, env, url);
       if (path === '/admin/instagram/upload' && request.method === 'GET') return handleInstagramUploadPage(request, env);
