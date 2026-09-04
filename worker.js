@@ -259,22 +259,28 @@ function navHtml(active) {
       ${tab('/admin/products', '최근 업로드', 'products')}
       ${tab('/admin/stats', '클릭 통계', 'stats')}
       ${tab('/admin/youtube/upload', '영상 업로드', 'youtube')}
+      ${tab('/admin/instagram/upload', '인스타 업로드', 'instagram')}
       <form method="POST" action="/admin/logout" style="margin-left:auto;">
         <button type="submit" class="secondary">로그아웃</button>
       </form>
     </div>`;
 }
 
-function adminPage(successParam, youtubeConnected, justConnectedYoutube) {
+function adminPage(successParam, youtubeConnected, justConnectedYoutube, instagramConnected, justConnectedInstagram) {
   const youtubeStatus = youtubeConnected
     ? '<span style="color:#2e7d4f;">✓ 연동됨</span>'
     : '<a href="/admin/youtube/connect">연동하기</a>';
+  const instagramStatus = instagramConnected
+    ? '<span style="color:#2e7d4f;">✓ 연동됨</span>'
+    : '<a href="/admin/instagram/connect">연동하기</a>';
   return page('상품 업로드', `
     <div class="wrap">
       ${navHtml('upload')}
       ${justConnectedYoutube ? '<div class="success">유튜브 계정이 연동되었습니다.</div>' : ''}
-      <div style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#666;margin-bottom:28px;">
-        <strong style="color:#141414;">유튜브</strong> ${youtubeStatus}
+      ${justConnectedInstagram ? '<div class="success">인스타그램 계정이 연동되었습니다.</div>' : ''}
+      <div style="display:flex;align-items:center;gap:16px;font-size:12.5px;color:#666;margin-bottom:28px;flex-wrap:wrap;">
+        <span><strong style="color:#141414;">유튜브</strong> ${youtubeStatus}</span>
+        <span><strong style="color:#141414;">인스타그램</strong> ${instagramStatus}</span>
       </div>
       <h1>새 상품 업로드</h1>
       ${successParam === '1' ? '<div class="success">업로드되었습니다.</div>' : ''}
@@ -468,7 +474,9 @@ async function handleAdminHome(request, env, url) {
   await ensureSchema(env);
   const youtubeConnected = !!(await getSetting(env, 'youtube_refresh_token'));
   const justConnectedYoutube = url.searchParams.get('youtube') === 'connected';
-  return htmlResponse(adminPage(url.searchParams.get('success'), youtubeConnected, justConnectedYoutube));
+  const instagramConnected = !!(await getSetting(env, 'instagram_access_token'));
+  const justConnectedInstagram = url.searchParams.get('instagram') === 'connected';
+  return htmlResponse(adminPage(url.searchParams.get('success'), youtubeConnected, justConnectedYoutube, instagramConnected, justConnectedInstagram));
 }
 
 async function handleProductsPage(request, env, url) {
@@ -1047,6 +1055,312 @@ async function handleApiYoutubeUpload(request, env) {
   }
 }
 
+// ============================== Instagram ==============================
+
+const INSTAGRAM_REDIRECT_URI = 'https://seokhyun93-github-io.tjrgus3709.workers.dev/admin/instagram/callback';
+const INSTAGRAM_SCOPES = 'instagram_business_basic,instagram_business_content_publish';
+// 메타가 그래프 API 버전을 올리면(만료 에러 발생 시) 여기 숫자만 올리면 됩니다.
+const IG_API_VERSION = 'v21.0';
+
+async function handleInstagramConnect(request, env) {
+  if (!(await isAuthed(request, env))) return htmlResponse(loginPage(null));
+  const state = crypto.randomUUID();
+  await setSetting(env, 'instagram_oauth_state', state);
+  const params = new URLSearchParams({
+    client_id: env.INSTAGRAM_APP_ID,
+    redirect_uri: INSTAGRAM_REDIRECT_URI,
+    response_type: 'code',
+    scope: INSTAGRAM_SCOPES,
+    state,
+  });
+  return Response.redirect(`https://www.instagram.com/oauth/authorize?${params.toString()}`, 302);
+}
+
+async function handleInstagramCallback(request, env, url) {
+  if (!(await isAuthed(request, env))) return htmlResponse(loginPage(null));
+  await ensureSchema(env);
+
+  const error = url.searchParams.get('error');
+  if (error) {
+    return htmlResponse(page('인스타그램 연동', `<div class="wrap">${navHtml('instagram')}<h1>연동 실패</h1><p>${esc(url.searchParams.get('error_description') || error)}</p><a href="/admin">돌아가기</a></div>`));
+  }
+
+  const code = url.searchParams.get('code');
+  const state = url.searchParams.get('state');
+  const expectedState = await getSetting(env, 'instagram_oauth_state');
+  if (!code || !state || state !== expectedState) {
+    return htmlResponse(page('인스타그램 연동', `<div class="wrap">${navHtml('instagram')}<h1>연동 실패</h1><p>state 값이 일치하지 않습니다. 다시 시도해주세요.</p><a href="/admin">돌아가기</a></div>`));
+  }
+
+  const shortResp = await fetch('https://api.instagram.com/oauth/access_token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: env.INSTAGRAM_APP_ID,
+      client_secret: env.INSTAGRAM_APP_SECRET,
+      grant_type: 'authorization_code',
+      redirect_uri: INSTAGRAM_REDIRECT_URI,
+      code,
+    }),
+  });
+  const shortData = await shortResp.json();
+  if (!shortResp.ok || !shortData.access_token) {
+    return htmlResponse(page('인스타그램 연동', `<div class="wrap">${navHtml('instagram')}<h1>연동 실패</h1><pre style="white-space:pre-wrap;font-size:12px;background:#fafafa;padding:12px;border-radius:6px;">${esc(JSON.stringify(shortData, null, 2))}</pre><a href="/admin">돌아가기</a></div>`));
+  }
+
+  const longResp = await fetch(`https://graph.instagram.com/access_token?${new URLSearchParams({
+    grant_type: 'ig_exchange_token',
+    client_secret: env.INSTAGRAM_APP_SECRET,
+    access_token: shortData.access_token,
+  }).toString()}`);
+  const longData = await longResp.json();
+  if (!longResp.ok || !longData.access_token) {
+    return htmlResponse(page('인스타그램 연동', `<div class="wrap">${navHtml('instagram')}<h1>연동 실패 (장기 토큰)</h1><pre style="white-space:pre-wrap;font-size:12px;background:#fafafa;padding:12px;border-radius:6px;">${esc(JSON.stringify(longData, null, 2))}</pre><a href="/admin">돌아가기</a></div>`));
+  }
+
+  await setSetting(env, 'instagram_access_token', longData.access_token);
+  await setSetting(env, 'instagram_user_id', String(shortData.user_id));
+  await setSetting(env, 'instagram_connected_at', String(Date.now()));
+
+  return Response.redirect('https://seokhyun93-github-io.tjrgus3709.workers.dev/admin?instagram=connected', 302);
+}
+
+async function igApiRequest(env, method, path, params) {
+  const accessToken = await getSetting(env, 'instagram_access_token');
+  if (!accessToken) throw new Error('인스타그램이 연동되어 있지 않습니다.');
+  const url = new URL(`https://graph.instagram.com/${IG_API_VERSION}${path}`);
+  const body = new URLSearchParams({ ...params, access_token: accessToken });
+  let resp;
+  if (method === 'GET') {
+    for (const [k, v] of body.entries()) url.searchParams.set(k, v);
+    resp = await fetch(url.toString());
+  } else {
+    resp = await fetch(url.toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+  }
+  const data = await resp.json();
+  if (!resp.ok || data.error) {
+    throw new Error((data && data.error && data.error.message) || JSON.stringify(data));
+  }
+  return data;
+}
+
+async function storeVideoInR2(env, file) {
+  const ext = (file.type && file.type.split('/')[1]) || 'mp4';
+  const key = `videos/${crypto.randomUUID()}.${ext}`;
+  await env.IMAGES.put(key, await file.arrayBuffer(), { httpMetadata: { contentType: file.type || 'video/mp4' } });
+  return `https://seokhyun93-github-io.tjrgus3709.workers.dev/images/${key}`;
+}
+
+async function createInstagramContainer(env, videoUrl, caption) {
+  const igUserId = await getSetting(env, 'instagram_user_id');
+  const data = await igApiRequest(env, 'POST', `/${igUserId}/media`, {
+    media_type: 'REELS',
+    video_url: videoUrl,
+    caption: caption || '',
+  });
+  return data.id;
+}
+
+async function getInstagramContainerStatus(env, creationId) {
+  return igApiRequest(env, 'GET', `/${creationId}`, { fields: 'status_code,status' });
+}
+
+async function publishInstagramContainer(env, creationId) {
+  const igUserId = await getSetting(env, 'instagram_user_id');
+  const data = await igApiRequest(env, 'POST', `/${igUserId}/media_publish`, { creation_id: creationId });
+  return data.id;
+}
+
+function instagramUploadPage(instagramConnected, errorMsg) {
+  if (!instagramConnected) {
+    return page('인스타그램 업로드', `
+      <div class="wrap">
+        ${navHtml('instagram')}
+        <h1>인스타그램 릴스 업로드</h1>
+        <p style="font-size:13px;color:#666;">먼저 인스타그램 계정을 연동해주세요. (비즈니스/크리에이터 계정만 가능)</p>
+        <a href="/admin/instagram/connect" style="display:inline-block;margin-top:8px;padding:11px 20px;font-size:13px;font-weight:700;color:#fff;background:#141414;border-radius:6px;text-decoration:none;">인스타그램 연동하기</a>
+      </div>
+    `);
+  }
+  return page('인스타그램 업로드', `
+    <div class="wrap">
+      ${navHtml('instagram')}
+      <h1>인스타그램 릴스 업로드</h1>
+      ${errorMsg ? `<div class="error" style="margin-bottom:16px;">${esc(errorMsg)}</div>` : ''}
+      <form method="POST" action="/admin/instagram/upload" enctype="multipart/form-data" id="igForm">
+        <label>영상 파일</label>
+        <input type="file" name="video" accept="video/*" required>
+        <div class="hint">세로 영상(9:16), 5~90초, 100MB 이하 권장</div>
+
+        <label>캡션 (선택)</label>
+        <textarea name="caption" rows="4" placeholder="게시글에 들어갈 설명, 해시태그 등"></textarea>
+
+        <button type="submit">업로드</button>
+      </form>
+    </div>
+  `, `
+    const form = document.getElementById('igForm');
+    form.addEventListener('submit', () => {
+      const btn = form.querySelector('button[type=submit]');
+      btn.disabled = true;
+      btn.textContent = '업로드 중... (시간이 걸릴 수 있어요)';
+    });
+  `);
+}
+
+function instagramStatusPage(creationId) {
+  return page('인스타그램 업로드', `
+    <div class="wrap">
+      ${navHtml('instagram')}
+      <h1>인스타그램 처리 중...</h1>
+      <p id="statusText" style="font-size:13px;color:#666;">인스타그램이 영상을 처리하고 있어요. 잠시만 기다려주세요.</p>
+      <button id="publishBtn" type="button" disabled style="opacity:.4;">발행하기</button>
+      <div id="resultBox"></div>
+    </div>
+  `, `
+    const creationId = ${JSON.stringify(creationId)};
+    const statusText = document.getElementById('statusText');
+    const publishBtn = document.getElementById('publishBtn');
+    const resultBox = document.getElementById('resultBox');
+
+    async function checkStatus() {
+      const res = await fetch('/admin/instagram/status.json?creation_id=' + encodeURIComponent(creationId));
+      const data = await res.json();
+      if (data.error) {
+        statusText.textContent = '오류: ' + data.error;
+        return;
+      }
+      if (data.status_code === 'FINISHED') {
+        statusText.textContent = '처리 완료! 발행할 수 있어요.';
+        publishBtn.disabled = false;
+        publishBtn.style.opacity = '1';
+      } else if (data.status_code === 'ERROR' || data.status_code === 'EXPIRED') {
+        statusText.textContent = '처리 실패: ' + data.status_code;
+      } else {
+        statusText.textContent = '처리 중... (' + (data.status_code || '확인 중') + ')';
+        setTimeout(checkStatus, 4000);
+      }
+    }
+    checkStatus();
+
+    publishBtn.addEventListener('click', async () => {
+      publishBtn.disabled = true;
+      publishBtn.textContent = '발행 중...';
+      const res = await fetch('/admin/instagram/publish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ creation_id: creationId }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        resultBox.innerHTML = '<div class="error">발행 실패: ' + data.error + '</div>';
+        publishBtn.disabled = false;
+        publishBtn.textContent = '발행하기';
+      } else {
+        resultBox.innerHTML = '<div class="success">발행 완료!</div>';
+      }
+    });
+  `);
+}
+
+async function handleInstagramUploadPage(request, env) {
+  if (!(await isAuthed(request, env))) return htmlResponse(loginPage(null));
+  await ensureSchema(env);
+  const instagramConnected = !!(await getSetting(env, 'instagram_access_token'));
+  return htmlResponse(instagramUploadPage(instagramConnected, null));
+}
+
+async function handleInstagramUpload(request, env) {
+  if (!(await isAuthed(request, env))) return htmlResponse(loginPage(null));
+  await ensureSchema(env);
+  try {
+    const form = await request.formData();
+    const videoFile = form.get('video');
+    const caption = (form.get('caption') || '').toString();
+
+    if (!videoFile || typeof videoFile === 'string') {
+      return htmlResponse(instagramUploadPage(true, '영상 파일은 필수입니다.'));
+    }
+
+    const videoUrl = await storeVideoInR2(env, videoFile);
+    const creationId = await createInstagramContainer(env, videoUrl, caption);
+
+    return htmlResponse(instagramStatusPage(creationId));
+  } catch (err) {
+    return htmlResponse(instagramUploadPage(true, err && err.message ? err.message : String(err)));
+  }
+}
+
+async function handleInstagramStatusJson(request, env, url) {
+  if (!(await isAuthed(request, env))) return jsonResponse({ error: '인증 필요' }, 401);
+  try {
+    const creationId = url.searchParams.get('creation_id');
+    const data = await getInstagramContainerStatus(env, creationId);
+    return jsonResponse(data);
+  } catch (err) {
+    return jsonResponse({ error: err && err.message ? err.message : String(err) }, 500);
+  }
+}
+
+async function handleInstagramPublish(request, env) {
+  if (!(await isAuthed(request, env))) return jsonResponse({ error: '인증 필요' }, 401);
+  try {
+    const body = await request.json();
+    const mediaId = await publishInstagramContainer(env, body.creation_id);
+    return jsonResponse({ id: mediaId });
+  } catch (err) {
+    return jsonResponse({ error: err && err.message ? err.message : String(err) }, 500);
+  }
+}
+
+// 로컬 자동화 스크립트용 (토큰 인증)
+async function handleApiVideoUpload(request, env) {
+  if (!checkApiToken(request, env)) return jsonResponse({ error: 'unauthorized' }, 401);
+  await ensureSchema(env);
+  const form = await request.formData();
+  const file = form.get('video');
+  if (!file || typeof file === 'string') return jsonResponse({ error: 'video is required' }, 400);
+  const videoUrl = await storeVideoInR2(env, file);
+  return jsonResponse({ url: videoUrl });
+}
+
+async function handleApiInstagramPublish(request, env) {
+  if (!checkApiToken(request, env)) return jsonResponse({ error: 'unauthorized' }, 401);
+  try {
+    const body = await request.json();
+    const creationId = await createInstagramContainer(env, body.video_url, body.caption || '');
+    return jsonResponse({ creation_id: creationId });
+  } catch (err) {
+    return jsonResponse({ error: err && err.message ? err.message : String(err) }, 500);
+  }
+}
+
+async function handleApiInstagramStatus(request, env, url) {
+  if (!checkApiToken(request, env)) return jsonResponse({ error: 'unauthorized' }, 401);
+  try {
+    const creationId = url.searchParams.get('creation_id');
+    const data = await getInstagramContainerStatus(env, creationId);
+    return jsonResponse(data);
+  } catch (err) {
+    return jsonResponse({ error: err && err.message ? err.message : String(err) }, 500);
+  }
+}
+
+async function handleApiInstagramMediaPublish(request, env) {
+  if (!checkApiToken(request, env)) return jsonResponse({ error: 'unauthorized' }, 401);
+  try {
+    const body = await request.json();
+    const mediaId = await publishInstagramContainer(env, body.creation_id);
+    return jsonResponse({ id: mediaId });
+  } catch (err) {
+    return jsonResponse({ error: err && err.message ? err.message : String(err) }, 500);
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -1063,6 +1377,12 @@ export default {
       if (path === '/admin/youtube/callback' && request.method === 'GET') return handleYoutubeCallback(request, env, url);
       if (path === '/admin/youtube/upload' && request.method === 'GET') return handleYoutubeUploadPage(request, env, url);
       if (path === '/admin/youtube/upload' && request.method === 'POST') return handleYoutubeUpload(request, env);
+      if (path === '/admin/instagram/connect' && request.method === 'GET') return handleInstagramConnect(request, env);
+      if (path === '/admin/instagram/callback' && request.method === 'GET') return handleInstagramCallback(request, env, url);
+      if (path === '/admin/instagram/upload' && request.method === 'GET') return handleInstagramUploadPage(request, env);
+      if (path === '/admin/instagram/upload' && request.method === 'POST') return handleInstagramUpload(request, env);
+      if (path === '/admin/instagram/status.json' && request.method === 'GET') return handleInstagramStatusJson(request, env, url);
+      if (path === '/admin/instagram/publish' && request.method === 'POST') return handleInstagramPublish(request, env);
       if (path.startsWith('/admin/edit/') && request.method === 'GET') {
         return handleEditPage(request, env, parseInt(path.slice('/admin/edit/'.length), 10));
       }
@@ -1077,6 +1397,10 @@ export default {
       }
       if (path.startsWith('/api/click/') && request.method === 'POST') return handleClick(env, path);
       if (path === '/api/admin/youtube/upload' && request.method === 'POST') return handleApiYoutubeUpload(request, env);
+      if (path === '/api/admin/videos' && request.method === 'POST') return handleApiVideoUpload(request, env);
+      if (path === '/api/admin/instagram/publish' && request.method === 'POST') return handleApiInstagramPublish(request, env);
+      if (path === '/api/admin/instagram/status' && request.method === 'GET') return handleApiInstagramStatus(request, env, url);
+      if (path === '/api/admin/instagram/media_publish' && request.method === 'POST') return handleApiInstagramMediaPublish(request, env);
       if (path === '/api/admin/run-daily-toss-update' && request.method === 'POST') {
         if (!checkApiToken(request, env)) return jsonResponse({ error: 'unauthorized' }, 401);
         const results = await runDailyTossUpdate(env);
