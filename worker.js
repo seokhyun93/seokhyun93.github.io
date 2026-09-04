@@ -16,7 +16,21 @@ async function ensureSchema(env) {
       // column already exists
     }
   }
+  await env.DB.prepare(
+    'CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)'
+  ).run();
   schemaReady = true;
+}
+
+async function getSetting(env, key) {
+  const row = await env.DB.prepare('SELECT value FROM settings WHERE key = ?').bind(key).first();
+  return row ? row.value : null;
+}
+
+async function setSetting(env, key, value) {
+  await env.DB.prepare(
+    'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+  ).bind(key, value).run();
 }
 
 function youtubeEmbedUrl(url) {
@@ -245,10 +259,17 @@ function navHtml(active) {
     </div>`;
 }
 
-function adminPage(successParam) {
+function adminPage(successParam, youtubeConnected, justConnectedYoutube) {
+  const youtubeStatus = youtubeConnected
+    ? '<span style="color:#2e7d4f;">✓ 연동됨</span>'
+    : '<a href="/admin/youtube/connect">연동하기</a>';
   return page('상품 업로드', `
     <div class="wrap">
       ${navHtml('upload')}
+      ${justConnectedYoutube ? '<div class="success">유튜브 계정이 연동되었습니다.</div>' : ''}
+      <div style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#666;margin-bottom:28px;">
+        <strong style="color:#141414;">유튜브</strong> ${youtubeStatus}
+      </div>
       <h1>새 상품 업로드</h1>
       ${successParam === '1' ? '<div class="success">업로드되었습니다.</div>' : ''}
       ${successParam === 'missing' ? '<div class="error" style="margin-bottom:16px;">제목, 이미지, 상세페이지 링크는 필수입니다.</div>' : ''}
@@ -390,7 +411,10 @@ async function handleAdminHome(request, env, url) {
   if (!(await isAuthed(request, env))) {
     return htmlResponse(loginPage(url.searchParams.get('error')));
   }
-  return htmlResponse(adminPage(url.searchParams.get('success')));
+  await ensureSchema(env);
+  const youtubeConnected = !!(await getSetting(env, 'youtube_refresh_token'));
+  const justConnectedYoutube = url.searchParams.get('youtube') === 'connected';
+  return htmlResponse(adminPage(url.searchParams.get('success'), youtubeConnected, justConnectedYoutube));
 }
 
 async function handleProductsPage(request, env, url) {
@@ -778,6 +802,63 @@ async function runDailyTossUpdate(env) {
   return results;
 }
 
+const YOUTUBE_REDIRECT_URI = 'https://seokhyun93-github-io.tjrgus3709.workers.dev/admin/youtube/callback';
+const YOUTUBE_SCOPES = 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly';
+
+async function handleYoutubeConnect(request, env) {
+  if (!(await isAuthed(request, env))) return htmlResponse(loginPage(null));
+  const state = crypto.randomUUID();
+  await setSetting(env, 'youtube_oauth_state', state);
+
+  const params = new URLSearchParams({
+    client_id: env.YOUTUBE_CLIENT_ID,
+    redirect_uri: YOUTUBE_REDIRECT_URI,
+    response_type: 'code',
+    scope: YOUTUBE_SCOPES,
+    access_type: 'offline',
+    prompt: 'consent',
+    state,
+  });
+  return Response.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`, 302);
+}
+
+async function handleYoutubeCallback(request, env, url) {
+  if (!(await isAuthed(request, env))) return htmlResponse(loginPage(null));
+  await ensureSchema(env);
+
+  const error = url.searchParams.get('error');
+  if (error) return htmlResponse(page('유튜브 연동', `<div class="wrap"><h1>연동 실패</h1><p>${esc(error)}</p><a href="/admin">돌아가기</a></div>`));
+
+  const code = url.searchParams.get('code');
+  const state = url.searchParams.get('state');
+  const expectedState = await getSetting(env, 'youtube_oauth_state');
+  if (!code || !state || state !== expectedState) {
+    return htmlResponse(page('유튜브 연동', `<div class="wrap"><h1>연동 실패</h1><p>state 값이 일치하지 않습니다. 다시 시도해주세요.</p><a href="/admin">돌아가기</a></div>`));
+  }
+
+  const tokenResp = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      code,
+      client_id: env.YOUTUBE_CLIENT_ID,
+      client_secret: env.YOUTUBE_CLIENT_SECRET,
+      redirect_uri: YOUTUBE_REDIRECT_URI,
+      grant_type: 'authorization_code',
+    }),
+  });
+  const tokenData = await tokenResp.json();
+
+  if (!tokenResp.ok || !tokenData.refresh_token) {
+    return htmlResponse(page('유튜브 연동', `<div class="wrap"><h1>연동 실패</h1><pre style="white-space:pre-wrap;font-size:12px;background:#fafafa;padding:12px;border-radius:6px;">${esc(JSON.stringify(tokenData, null, 2))}</pre><a href="/admin">돌아가기</a></div>`));
+  }
+
+  await setSetting(env, 'youtube_refresh_token', tokenData.refresh_token);
+  await setSetting(env, 'youtube_connected_at', String(Date.now()));
+
+  return Response.redirect('https://seokhyun93-github-io.tjrgus3709.workers.dev/admin?youtube=connected', 302);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -790,6 +871,8 @@ export default {
       if (path === '/admin/upload' && request.method === 'POST') return handleUpload(request, env);
       if (path === '/admin/stats' && request.method === 'GET') return handleStats(request, env);
       if (path === '/admin/products' && request.method === 'GET') return handleProductsPage(request, env, url);
+      if (path === '/admin/youtube/connect' && request.method === 'GET') return handleYoutubeConnect(request, env);
+      if (path === '/admin/youtube/callback' && request.method === 'GET') return handleYoutubeCallback(request, env, url);
       if (path.startsWith('/admin/edit/') && request.method === 'GET') {
         return handleEditPage(request, env, parseInt(path.slice('/admin/edit/'.length), 10));
       }
