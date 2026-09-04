@@ -116,6 +116,11 @@ function baseStyle() {
     textarea { resize:vertical; }
     input:focus, textarea:focus { border-color:#c9705a; }
     input[type=file] { margin-top:4px; font-size:13px; }
+    select {
+      width:100%; padding:10px 12px; font-size:14px; border:1px solid #e5e5e5; border-radius:6px; font-family:inherit; outline:none; background:#fff;
+    }
+    select:focus { border-color:#c9705a; }
+    .hint { font-size:11.5px; color:#999; margin-top:4px; }
     button { margin-top:24px; padding:11px 20px; font-size:13px; font-weight:700; color:#fff; background:#141414; border:none; border-radius:6px; cursor:pointer; font-family:inherit; }
     button:disabled { background:#ccc; cursor:default; }
     button.secondary { background:none; color:#888; font-weight:400; padding:0; margin-top:0; text-decoration:underline; }
@@ -253,6 +258,7 @@ function navHtml(active) {
       ${tab('/admin', '업로드', 'upload')}
       ${tab('/admin/products', '최근 업로드', 'products')}
       ${tab('/admin/stats', '클릭 통계', 'stats')}
+      ${tab('/admin/youtube/upload', '영상 업로드', 'youtube')}
       <form method="POST" action="/admin/logout" style="margin-left:auto;">
         <button type="submit" class="secondary">로그아웃</button>
       </form>
@@ -300,6 +306,54 @@ function adminPage(successParam, youtubeConnected, justConnectedYoutube) {
       </form>
     </div>
   `, imageFormScript(true));
+}
+
+function youtubeUploadPage(youtubeConnected, errorMsg, successVideoId) {
+  if (!youtubeConnected) {
+    return page('영상 업로드', `
+      <div class="wrap">
+        ${navHtml('youtube')}
+        <h1>유튜브 영상 업로드</h1>
+        <p style="font-size:13px;color:#666;">먼저 유튜브 계정을 연동해주세요.</p>
+        <a href="/admin/youtube/connect" style="display:inline-block;margin-top:8px;padding:11px 20px;font-size:13px;font-weight:700;color:#fff;background:#141414;border-radius:6px;text-decoration:none;">유튜브 연동하기</a>
+      </div>
+    `);
+  }
+  return page('영상 업로드', `
+    <div class="wrap">
+      ${navHtml('youtube')}
+      <h1>유튜브 영상 업로드</h1>
+      ${successVideoId ? `<div class="success">업로드 완료! <a href="https://www.youtube.com/watch?v=${esc(successVideoId)}" target="_blank" rel="noopener noreferrer">영상 보러가기</a></div>` : ''}
+      ${errorMsg ? `<div class="error" style="margin-bottom:16px;">${esc(errorMsg)}</div>` : ''}
+      <form method="POST" action="/admin/youtube/upload" enctype="multipart/form-data" id="youtubeForm">
+        <label>영상 파일</label>
+        <input type="file" name="video" accept="video/*" required>
+        <div class="hint">30초 내외 짧은 영상 기준, 100MB 이하 권장</div>
+
+        <label>제목</label>
+        <input type="text" name="title" required>
+
+        <label>설명 (선택)</label>
+        <textarea name="description" rows="4"></textarea>
+
+        <label>공개 범위</label>
+        <select name="privacy">
+          <option value="public">전체 공개</option>
+          <option value="unlisted">일부 공개</option>
+          <option value="private">비공개</option>
+        </select>
+
+        <button type="submit">업로드</button>
+      </form>
+    </div>
+  `, `
+    const form = document.getElementById('youtubeForm');
+    form.addEventListener('submit', () => {
+      const btn = form.querySelector('button[type=submit]');
+      btn.disabled = true;
+      btn.textContent = '업로드 중... (시간이 걸릴 수 있어요)';
+    });
+  `);
 }
 
 function adminPagerHtml(basePath, page, totalPages) {
@@ -859,6 +913,97 @@ async function handleYoutubeCallback(request, env, url) {
   return Response.redirect('https://seokhyun93-github-io.tjrgus3709.workers.dev/admin?youtube=connected', 302);
 }
 
+async function getYoutubeAccessToken(env) {
+  const refreshToken = await getSetting(env, 'youtube_refresh_token');
+  if (!refreshToken) throw new Error('유튜브가 연동되어 있지 않습니다.');
+  const resp = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      refresh_token: refreshToken,
+      client_id: env.YOUTUBE_CLIENT_ID,
+      client_secret: env.YOUTUBE_CLIENT_SECRET,
+      grant_type: 'refresh_token',
+    }),
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.access_token) {
+    throw new Error('액세스 토큰 발급 실패: ' + JSON.stringify(data));
+  }
+  return data.access_token;
+}
+
+async function handleYoutubeUploadPage(request, env, url) {
+  if (!(await isAuthed(request, env))) return htmlResponse(loginPage(null));
+  await ensureSchema(env);
+  const youtubeConnected = !!(await getSetting(env, 'youtube_refresh_token'));
+  return htmlResponse(youtubeUploadPage(youtubeConnected, url.searchParams.get('error'), url.searchParams.get('success')));
+}
+
+async function handleYoutubeUpload(request, env) {
+  if (!(await isAuthed(request, env))) return htmlResponse(loginPage(null));
+  await ensureSchema(env);
+  try {
+    const form = await request.formData();
+    const videoFile = form.get('video');
+    const title = (form.get('title') || '').toString().trim();
+    const description = (form.get('description') || '').toString();
+    const privacyStatus = ['public', 'unlisted', 'private'].includes(form.get('privacy'))
+      ? form.get('privacy').toString()
+      : 'public';
+
+    if (!videoFile || typeof videoFile === 'string' || !title) {
+      return new Response(null, {
+        status: 303,
+        headers: { Location: '/admin/youtube/upload?error=' + encodeURIComponent('영상 파일과 제목은 필수입니다.') },
+      });
+    }
+
+    const accessToken = await getYoutubeAccessToken(env);
+
+    const metadata = {
+      snippet: { title, description, categoryId: '22' },
+      status: { privacyStatus, selfDeclaredMadeForKids: false },
+    };
+
+    const boundary = 'youtubeupload' + crypto.randomUUID().replace(/-/g, '');
+    const encoder = new TextEncoder();
+    const videoBytes = new Uint8Array(await videoFile.arrayBuffer());
+    const head = encoder.encode(
+      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n--${boundary}\r\nContent-Type: ${videoFile.type || 'video/mp4'}\r\n\r\n`
+    );
+    const tail = encoder.encode(`\r\n--${boundary}--`);
+    const body = new Uint8Array(head.length + videoBytes.length + tail.length);
+    body.set(head, 0);
+    body.set(videoBytes, head.length);
+    body.set(tail, head.length + videoBytes.length);
+
+    const uploadResp = await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=snippet,status', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': `multipart/related; boundary=${boundary}`,
+      },
+      body,
+    });
+    const uploadData = await uploadResp.json();
+
+    if (!uploadResp.ok || !uploadData.id) {
+      throw new Error(uploadData?.error?.message || JSON.stringify(uploadData));
+    }
+
+    return new Response(null, {
+      status: 303,
+      headers: { Location: '/admin/youtube/upload?success=' + encodeURIComponent(uploadData.id) },
+    });
+  } catch (err) {
+    return new Response(null, {
+      status: 303,
+      headers: { Location: '/admin/youtube/upload?error=' + encodeURIComponent(err && err.message ? err.message : String(err)) },
+    });
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -873,6 +1018,8 @@ export default {
       if (path === '/admin/products' && request.method === 'GET') return handleProductsPage(request, env, url);
       if (path === '/admin/youtube/connect' && request.method === 'GET') return handleYoutubeConnect(request, env);
       if (path === '/admin/youtube/callback' && request.method === 'GET') return handleYoutubeCallback(request, env, url);
+      if (path === '/admin/youtube/upload' && request.method === 'GET') return handleYoutubeUploadPage(request, env, url);
+      if (path === '/admin/youtube/upload' && request.method === 'POST') return handleYoutubeUpload(request, env);
       if (path.startsWith('/admin/edit/') && request.method === 'GET') {
         return handleEditPage(request, env, parseInt(path.slice('/admin/edit/'.length), 10));
       }
