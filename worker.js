@@ -448,7 +448,7 @@ async function handleLogin(request, env) {
       status: 303,
       headers: {
         'Location': '/admin',
-        'Set-Cookie': `${COOKIE_NAME}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${SESSION_MAX_AGE}`,
+        'Set-Cookie': `${COOKIE_NAME}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${SESSION_MAX_AGE}`,
       },
     });
   }
@@ -460,7 +460,7 @@ async function handleLogout() {
     status: 303,
     headers: {
       Location: '/admin',
-      'Set-Cookie': `${COOKIE_NAME}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0`,
+      'Set-Cookie': `${COOKIE_NAME}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`,
     },
   });
 }
