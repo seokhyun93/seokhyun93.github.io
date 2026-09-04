@@ -816,7 +816,7 @@ async function handleYoutubeConnect(request, env) {
     response_type: 'code',
     scope: YOUTUBE_SCOPES,
     access_type: 'offline',
-    prompt: 'consent',
+    prompt: 'consent select_account',
     state,
   });
   return Response.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`, 302);
