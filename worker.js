@@ -235,6 +235,7 @@ function navHtml(active) {
   const tab = (href, text, key) => `<a href="${href}"${active === key ? ' class="active"' : ''}>${text}</a>`;
   return `
     <div class="nav">
+      <a href="/">← 홈으로</a>
       ${tab('/admin', '업로드', 'upload')}
       ${tab('/admin/products', '최근 업로드', 'products')}
       ${tab('/admin/stats', '클릭 통계', 'stats')}
