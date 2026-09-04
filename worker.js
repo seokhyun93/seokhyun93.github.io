@@ -682,6 +682,101 @@ async function handleImage(env, path) {
   });
 }
 
+let tossToken = null;
+let tossTokenExpiresAt = 0;
+
+async function getTossToken(env, forceRefresh = false) {
+  if (!forceRefresh && tossToken && Date.now() < tossTokenExpiresAt) return tossToken;
+  const resp = await fetch('https://oauth2.cert.toss.im/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'client_credentials',
+      client_id: env.TOSS_ACCESS_KEY,
+      client_secret: env.TOSS_SECRET_KEY,
+      scope: 'sharelink:read sharelink:write',
+    }),
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`토스 토큰 발급 실패 (${resp.status}): ${text.slice(0, 200)}`);
+  }
+  const data = await resp.json();
+  tossToken = data.access_token;
+  tossTokenExpiresAt = Date.now() + (data.expires_in || 3000) * 1000 - 60000;
+  return tossToken;
+}
+
+async function tossRequest(env, method, path, { params, body, _retry } = {}) {
+  const token = await getTossToken(env);
+  let url = `https://sharelink.toss.im${path}`;
+  if (params) url += '?' + new URLSearchParams(params).toString();
+
+  const resp = await fetch(url, {
+    method,
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+
+  if (resp.status === 401 && !_retry) {
+    await getTossToken(env, true);
+    return tossRequest(env, method, path, { params, body, _retry: true });
+  }
+
+  const data = await resp.json();
+  if (data.resultType === 'FAIL') {
+    const err = data.error || {};
+    throw new Error(`토스 API 오류 [${err.errorCode}] ${err.reason || ''}`);
+  }
+  return data.success;
+}
+
+async function tossGetTodayDeals(env, size = 20) {
+  return tossRequest(env, 'GET', '/openapi/products/today-deals', { params: { size: String(size) } });
+}
+
+async function tossIssueShareLink(env, tacaItemId) {
+  return tossRequest(env, 'POST', '/openapi/links', {
+    body: { tacaItemId, publisherId: env.TOSS_PUBLISHER_ID },
+  });
+}
+
+async function runDailyTossUpdate(env) {
+  await ensureSchema(env);
+  const deals = await tossGetTodayDeals(env, 20);
+
+  await env.DB.prepare("UPDATE products SET category = NULL WHERE category = 'today_deal'").run();
+
+  const results = [];
+  for (const item of deals.items || []) {
+    try {
+      const linkData = await tossIssueShareLink(env, item.tacaItemId);
+      const shortUrl = linkData.shortUrl;
+      const title = `🔥오늘만! ${item.displayName}`;
+
+      const existing = await env.DB.prepare('SELECT id FROM products WHERE link1_url = ?').bind(shortUrl).first();
+      if (existing) {
+        await env.DB.prepare(
+          'UPDATE products SET title = ?, image_key = ?, category = ? WHERE id = ?'
+        ).bind(title, item.thumbnailUrl, 'today_deal', existing.id).run();
+        results.push({ ok: true, title, mode: 'updated' });
+      } else {
+        await insertProduct(env, {
+          title,
+          key: item.thumbnailUrl,
+          detailLink: shortUrl,
+          links: [{ label: '최저가 확인!', url: shortUrl }],
+          category: 'today_deal',
+        });
+        results.push({ ok: true, title, mode: 'inserted' });
+      }
+    } catch (err) {
+      results.push({ ok: false, title: item.displayName, error: err.message });
+    }
+  }
+  return results;
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -707,6 +802,11 @@ export default {
         return handleApiEdit(request, env, parseInt(path.slice('/api/admin/products/'.length), 10));
       }
       if (path.startsWith('/api/click/') && request.method === 'POST') return handleClick(env, path);
+      if (path === '/api/admin/run-daily-toss-update' && request.method === 'POST') {
+        if (!checkApiToken(request, env)) return jsonResponse({ error: 'unauthorized' }, 401);
+        const results = await runDailyTossUpdate(env);
+        return jsonResponse({ results });
+      }
 
       if (path.startsWith('/images/') && request.method === 'GET') return handleImage(env, path);
 
@@ -714,5 +814,9 @@ export default {
     } catch (err) {
       return new Response('Server error: ' + (err && err.message ? err.message : String(err)), { status: 500 });
     }
+  },
+
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runDailyTossUpdate(env));
   },
 };

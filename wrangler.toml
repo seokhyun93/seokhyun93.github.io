@@ -15,3 +15,6 @@ bucket_name = "shop-images"
 binding = "DB"
 database_name = "shop"
 database_id = "e6f429eb-ba22-4021-af73-fc6673c44c48"
+
+[triggers]
+crons = ["0 0 * * *"]
