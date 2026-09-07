@@ -708,6 +708,21 @@ async function handleEditSubmit(request, env, id) {
   return new Response(null, { status: 303, headers: { Location: '/admin?success=1' } });
 }
 
+async function handleSitemap(env) {
+  await ensureSchema(env);
+  const { results } = await env.DB.prepare('SELECT id, created_at FROM products ORDER BY created_at DESC').all();
+  const base = 'https://seokhyun93-github-io.tjrgus3709.workers.dev';
+  const urls = [
+    `<url><loc>${base}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>`,
+    ...results.map((r) => {
+      const date = new Date(r.created_at).toISOString().slice(0, 10);
+      return `<url><loc>${base}/?p=${r.id}</loc><lastmod>${date}</lastmod><changefreq>weekly</changefreq></url>`;
+    }),
+  ];
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join('\n')}\n</urlset>`;
+  return new Response(xml, { headers: { 'Content-Type': 'application/xml; charset=utf-8' } });
+}
+
 async function handleListProducts(env, url) {
   await ensureSchema(env);
   const id = parseInt(url.searchParams.get('id') || '', 10);
@@ -1409,6 +1424,7 @@ export default {
         return handleEditSubmit(request, env, parseInt(path.slice('/admin/edit/'.length), 10));
       }
 
+      if (path === '/sitemap.xml' && request.method === 'GET') return handleSitemap(env);
       if (path === '/api/products' && request.method === 'GET') return handleListProducts(env, url);
       if (path === '/api/admin/products' && request.method === 'POST') return handleApiUpload(request, env);
       if (path.startsWith('/api/admin/products/') && request.method === 'POST') {
