@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://seokhyun93-github-io.tjrgus3709.workers.dev/sitemap.xml
+Sitemap: https://coupanggoodthings.com/sitemap.xml

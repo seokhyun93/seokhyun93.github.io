@@ -711,7 +711,7 @@ async function handleEditSubmit(request, env, id) {
 async function handleSitemap(env) {
   await ensureSchema(env);
   const { results } = await env.DB.prepare('SELECT id, created_at FROM products ORDER BY created_at DESC').all();
-  const base = 'https://seokhyun93-github-io.tjrgus3709.workers.dev';
+  const base = 'https://coupanggoodthings.com';
   const urls = [
     `<url><loc>${base}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>`,
     ...results.map((r) => {
@@ -933,7 +933,7 @@ async function handleYoutubeCallback(request, env, url) {
   await setSetting(env, 'youtube_refresh_token', tokenData.refresh_token);
   await setSetting(env, 'youtube_connected_at', String(Date.now()));
 
-  return Response.redirect('https://seokhyun93-github-io.tjrgus3709.workers.dev/admin?youtube=connected', 302);
+  return Response.redirect('https://coupanggoodthings.com/admin?youtube=connected', 302);
 }
 
 async function getYoutubeAccessToken(env) {
@@ -1155,7 +1155,7 @@ async function handleInstagramCallback(request, env, url) {
   await setSetting(env, 'instagram_user_id', String(shortData.user_id));
   await setSetting(env, 'instagram_connected_at', String(Date.now()));
 
-  return Response.redirect('https://seokhyun93-github-io.tjrgus3709.workers.dev/admin?instagram=connected', 302);
+  return Response.redirect('https://coupanggoodthings.com/admin?instagram=connected', 302);
 }
 
 async function igApiRequest(env, method, path, params) {
@@ -1185,7 +1185,7 @@ async function storeVideoInR2(env, file) {
   const ext = (file.type && file.type.split('/')[1]) || 'mp4';
   const key = `videos/${crypto.randomUUID()}.${ext}`;
   await env.IMAGES.put(key, await file.arrayBuffer(), { httpMetadata: { contentType: file.type || 'video/mp4' } });
-  return `https://seokhyun93-github-io.tjrgus3709.workers.dev/images/${key}`;
+  return `https://coupanggoodthings.com/images/${key}`;
 }
 
 async function createInstagramContainer(env, videoUrl, caption) {
