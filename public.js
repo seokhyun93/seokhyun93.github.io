@@ -33,12 +33,27 @@ const gridStatus = document.getElementById('gridStatus');
 const searchResultEl = document.getElementById('searchResult');
 const searchInput = document.getElementById('searchInput');
 
+function setupRowScrollHint(rowEl) {
+  const wrap = rowEl.closest('.row-wrap');
+  if (!wrap) return;
+  const update = () => {
+    const hasOverflow = rowEl.scrollWidth > rowEl.clientWidth + 2;
+    wrap.classList.toggle('no-scroll', !hasOverflow);
+    const atEnd = rowEl.scrollLeft + rowEl.clientWidth >= rowEl.scrollWidth - 4;
+    wrap.classList.toggle('at-end', atEnd);
+  };
+  update();
+  rowEl.addEventListener('scroll', update, { passive: true });
+  window.addEventListener('resize', update);
+}
+
 async function loadTodayDeal() {
   const res = await fetch('/api/products?section=category&category=today_deal');
   const data = await res.json();
   if (data.items.length) {
     todayDealCategory.style.display = '';
     todayDealRow.innerHTML = data.items.map(cardHtml).join('');
+    setupRowScrollHint(todayDealRow);
   }
 }
 
@@ -46,6 +61,7 @@ async function loadPopular() {
   const res = await fetch('/api/products?section=popular');
   const data = await res.json();
   popularRow.innerHTML = data.items.map(cardHtml).join('') || '<div class="empty">등록된 상품이 없습니다.</div>';
+  setupRowScrollHint(popularRow);
 }
 
 let gridPage = 1;

@@ -106,6 +106,48 @@
     scrollbar-width: none;
   }
   .row::-webkit-scrollbar { display: none; }
+  .row-wrap {
+    position: relative;
+  }
+  .row-wrap::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 2px;
+    width: 56px;
+    background: linear-gradient(to right, rgba(255,255,255,0), #fff 70%);
+    pointer-events: none;
+    transition: opacity .2s;
+    z-index: 1;
+  }
+  .row-wrap.at-end::after,
+  .row-wrap.no-scroll::after {
+    opacity: 0;
+  }
+  .row-hint {
+    position: absolute;
+    top: 42px;
+    right: 4px;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: rgba(20,20,20,0.6);
+    box-shadow: 0 0 0 1.5px rgba(255,255,255,0.85), 0 1px 4px rgba(0,0,0,0.25);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    line-height: 1;
+    pointer-events: none;
+    transition: opacity .2s;
+    z-index: 2;
+  }
+  .row-wrap.at-end .row-hint,
+  .row-wrap.no-scroll .row-hint {
+    opacity: 0;
+  }
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
@@ -240,12 +282,18 @@
   <div id="normalSections">
     <div class="category" id="todayDealCategory" style="display:none;">
       <div class="category-header"><div class="title">🔥오늘 최저가🔥</div></div>
-      <div class="row" id="todayDealRow"></div>
+      <div class="row-wrap">
+        <div class="row" id="todayDealRow"></div>
+        <div class="row-hint" aria-hidden="true">›</div>
+      </div>
     </div>
 
     <div class="category">
       <div class="category-header"><div class="title">💗인기 제품💗</div></div>
-      <div class="row" id="popularRow"></div>
+      <div class="row-wrap">
+        <div class="row" id="popularRow"></div>
+        <div class="row-hint" aria-hidden="true">›</div>
+      </div>
     </div>
 
     <div class="category">
