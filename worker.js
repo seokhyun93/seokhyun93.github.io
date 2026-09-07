@@ -751,7 +751,7 @@ async function handleListProducts(env, url) {
   if (section === 'category') {
     const category = (url.searchParams.get('category') || '').trim();
     if (!category) return jsonResponse({ items: [] });
-    const { results } = await env.DB.prepare('SELECT * FROM products WHERE category = ? ORDER BY created_at DESC LIMIT 20').bind(category).all();
+    const { results } = await env.DB.prepare('SELECT * FROM products WHERE category = ? ORDER BY created_at DESC LIMIT 50').bind(category).all();
     return jsonResponse({ items: results.map(normalizeRow) });
   }
 
@@ -843,40 +843,72 @@ async function tossIssueShareLink(env, tacaItemId) {
   });
 }
 
-async function runDailyTossUpdate(env) {
+async function clearTodayDealCategory(env) {
   await ensureSchema(env);
-  const deals = await tossGetTodayDeals(env, 20);
-
   await env.DB.prepare("UPDATE products SET category = NULL WHERE category = 'today_deal'").run();
+}
+
+async function upsertTodayDealItem(env, { title, thumbnailUrl, shortUrl }) {
+  const existing = await env.DB.prepare('SELECT id FROM products WHERE link1_url = ?').bind(shortUrl).first();
+  if (existing) {
+    await env.DB.prepare(
+      'UPDATE products SET title = ?, image_key = ?, category = ? WHERE id = ?'
+    ).bind(title, thumbnailUrl, 'today_deal', existing.id).run();
+    return { ok: true, title, mode: 'updated' };
+  }
+  await insertProduct(env, {
+    title,
+    key: thumbnailUrl,
+    detailLink: shortUrl,
+    links: [{ label: '최저가 확인!', url: shortUrl }],
+    category: 'today_deal',
+  });
+  return { ok: true, title, mode: 'inserted' };
+}
+
+async function runDailyTossUpdate(env) {
+  await clearTodayDealCategory(env);
+  const deals = await tossGetTodayDeals(env, 50);
 
   const results = [];
   for (const item of deals.items || []) {
     try {
       const linkData = await tossIssueShareLink(env, item.tacaItemId);
-      const shortUrl = linkData.shortUrl;
       const title = `🔥오늘만! ${item.displayName}`;
-
-      const existing = await env.DB.prepare('SELECT id FROM products WHERE link1_url = ?').bind(shortUrl).first();
-      if (existing) {
-        await env.DB.prepare(
-          'UPDATE products SET title = ?, image_key = ?, category = ? WHERE id = ?'
-        ).bind(title, item.thumbnailUrl, 'today_deal', existing.id).run();
-        results.push({ ok: true, title, mode: 'updated' });
-      } else {
-        await insertProduct(env, {
-          title,
-          key: item.thumbnailUrl,
-          detailLink: shortUrl,
-          links: [{ label: '최저가 확인!', url: shortUrl }],
-          category: 'today_deal',
-        });
-        results.push({ ok: true, title, mode: 'inserted' });
-      }
+      results.push(await upsertTodayDealItem(env, { title, thumbnailUrl: item.thumbnailUrl, shortUrl: linkData.shortUrl }));
     } catch (err) {
       results.push({ ok: false, title: item.displayName, error: err.message });
     }
   }
   return results;
+}
+
+// 로컬(허용된 IP)에서 토스 API로 직접 가져온 오늘 최저가 데이터를 D1에 반영.
+// (토스 API 호출은 IP 등록이 필요해 Worker에서 직접 못 하므로, 로컬 스크립트가 대신 호출하고
+// 결과 데이터만 이 엔드포인트로 넘겨서 저장한다.)
+async function handleApiTodayDealsSync(request, env) {
+  if (!checkApiToken(request, env)) return jsonResponse({ error: 'unauthorized' }, 401);
+  await ensureSchema(env);
+  try {
+    const body = await request.json();
+    const items = Array.isArray(body.items) ? body.items : [];
+    await clearTodayDealCategory(env);
+    const results = [];
+    for (const item of items) {
+      try {
+        results.push(await upsertTodayDealItem(env, {
+          title: item.title,
+          thumbnailUrl: item.image,
+          shortUrl: item.shortUrl,
+        }));
+      } catch (err) {
+        results.push({ ok: false, title: item.title, error: err.message });
+      }
+    }
+    return jsonResponse({ results });
+  } catch (err) {
+    return jsonResponse({ error: err && err.message ? err.message : String(err) }, 500);
+  }
 }
 
 const YOUTUBE_REDIRECT_URI = 'https://seokhyun93-github-io.tjrgus3709.workers.dev/admin/youtube/callback';
@@ -1436,6 +1468,7 @@ export default {
       if (path === '/api/admin/instagram/publish' && request.method === 'POST') return handleApiInstagramPublish(request, env);
       if (path === '/api/admin/instagram/status' && request.method === 'GET') return handleApiInstagramStatus(request, env, url);
       if (path === '/api/admin/instagram/media_publish' && request.method === 'POST') return handleApiInstagramMediaPublish(request, env);
+      if (path === '/api/admin/today-deals/sync' && request.method === 'POST') return handleApiTodayDealsSync(request, env);
       if (path === '/api/admin/run-daily-toss-update' && request.method === 'POST') {
         if (!checkApiToken(request, env)) return jsonResponse({ error: 'unauthorized' }, 401);
         const results = await runDailyTossUpdate(env);
