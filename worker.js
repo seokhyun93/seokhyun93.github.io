@@ -744,6 +744,12 @@ async function handleListProducts(env, url) {
   const q = (url.searchParams.get('q') || '').trim();
 
   if (q) {
+    // 순수 숫자만 입력하면(예: "2") 제목 맨 앞의 "2. " 번호표로 그 상품만 정확히 찾는다.
+    // (일반 부분일치로 하면 "2L", "17개입" 같은 엉뚱한 상품까지 걸려서 숫자 검색이 무의미해짐)
+    if (/^\d+$/.test(q)) {
+      const { results } = await env.DB.prepare('SELECT * FROM products WHERE title LIKE ? ORDER BY created_at DESC LIMIT 50').bind(`${q}. %`).all();
+      if (results.length) return jsonResponse({ items: results.map(normalizeRow) });
+    }
     const { results } = await env.DB.prepare('SELECT * FROM products WHERE title LIKE ? ORDER BY created_at DESC LIMIT 50').bind(`%${q}%`).all();
     return jsonResponse({ items: results.map(normalizeRow) });
   }
