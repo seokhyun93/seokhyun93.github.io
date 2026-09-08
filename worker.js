@@ -807,27 +807,50 @@ async function handleImage(env, path) {
 // 호출 앞에서 카테고리부터 지워버려 오늘 최저가 데이터가 통째로 날아가는 사고가
 // 있었다 — 크론과 그 코드는 제거함, 절대 다시 추가하지 말 것.
 
-async function clearTodayDealCategory(env) {
+// 오늘 특가 목록을 통째로 반영: 넘어온 items와 매칭되는 기존 today_deal 상품은
+// 갱신하고, 새로운 상품은 추가하고, 이번에 목록에서 빠진(더 이상 특가가 아닌)
+// 기존 today_deal 상품은 삭제한다. "오늘 특가"는 그 태그가 있을 때만 의미가
+// 있는 상품이라, 태그만 지우고 남겨두면 "전체 상품"에 정체불명 상품으로 계속
+// 쌓이기만 해서(실제로 한번 그렇게 70개 넘게 쌓였었음) 아예 삭제하는 쪽으로 바꿈.
+async function syncTodayDeals(env, items) {
   await ensureSchema(env);
-  await env.DB.prepare("UPDATE products SET category = NULL WHERE category = 'today_deal'").run();
-}
+  const { results: existingRows } = await env.DB.prepare(
+    "SELECT id, link1_url FROM products WHERE category = 'today_deal'"
+  ).all();
+  const existingIdByLink = new Map(existingRows.map((r) => [r.link1_url, r.id]));
+  const keptIds = new Set();
 
-async function upsertTodayDealItem(env, { title, thumbnailUrl, shortUrl }) {
-  const existing = await env.DB.prepare('SELECT id FROM products WHERE link1_url = ?').bind(shortUrl).first();
-  if (existing) {
-    await env.DB.prepare(
-      'UPDATE products SET title = ?, image_key = ?, category = ? WHERE id = ?'
-    ).bind(title, thumbnailUrl, 'today_deal', existing.id).run();
-    return { ok: true, title, mode: 'updated' };
+  const results = [];
+  for (const item of items) {
+    try {
+      const existingId = existingIdByLink.get(item.shortUrl);
+      if (existingId) {
+        await env.DB.prepare(
+          'UPDATE products SET title = ?, image_key = ? WHERE id = ?'
+        ).bind(item.title, item.thumbnailUrl, existingId).run();
+        keptIds.add(existingId);
+        results.push({ ok: true, title: item.title, mode: 'updated' });
+      } else {
+        await insertProduct(env, {
+          title: item.title,
+          key: item.thumbnailUrl,
+          detailLink: item.shortUrl,
+          links: [{ label: '최저가 확인!', url: item.shortUrl }],
+          category: 'today_deal',
+        });
+        results.push({ ok: true, title: item.title, mode: 'inserted' });
+      }
+    } catch (err) {
+      results.push({ ok: false, title: item.title, error: err.message });
+    }
   }
-  await insertProduct(env, {
-    title,
-    key: thumbnailUrl,
-    detailLink: shortUrl,
-    links: [{ label: '최저가 확인!', url: shortUrl }],
-    category: 'today_deal',
-  });
-  return { ok: true, title, mode: 'inserted' };
+
+  const staleIds = existingRows.map((r) => r.id).filter((id) => !keptIds.has(id));
+  for (const id of staleIds) {
+    await env.DB.prepare('DELETE FROM products WHERE id = ?').bind(id).run();
+  }
+
+  return { results, deletedCount: staleIds.length };
 }
 
 // 로컬(허용된 IP)에서 토스 API로 직접 가져온 오늘 최저가 데이터를 D1에 반영.
@@ -838,21 +861,13 @@ async function handleApiTodayDealsSync(request, env) {
   await ensureSchema(env);
   try {
     const body = await request.json();
-    const items = Array.isArray(body.items) ? body.items : [];
-    await clearTodayDealCategory(env);
-    const results = [];
-    for (const item of items) {
-      try {
-        results.push(await upsertTodayDealItem(env, {
-          title: item.title,
-          thumbnailUrl: item.image,
-          shortUrl: item.shortUrl,
-        }));
-      } catch (err) {
-        results.push({ ok: false, title: item.title, error: err.message });
-      }
-    }
-    return jsonResponse({ results });
+    const items = Array.isArray(body.items) ? body.items.map((item) => ({
+      title: item.title,
+      thumbnailUrl: item.image,
+      shortUrl: item.shortUrl,
+    })) : [];
+    const { results, deletedCount } = await syncTodayDeals(env, items);
+    return jsonResponse({ results, deletedCount });
   } catch (err) {
     return jsonResponse({ error: err && err.message ? err.message : String(err) }, 500);
   }
