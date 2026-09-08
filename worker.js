@@ -663,6 +663,15 @@ async function handleApiEdit(request, env, id) {
   return jsonResponse({ ok: true });
 }
 
+async function handleApiDelete(request, env, id) {
+  if (!checkApiToken(request, env)) {
+    return jsonResponse({ error: 'unauthorized' }, 401);
+  }
+  await ensureSchema(env);
+  await env.DB.prepare('DELETE FROM products WHERE id = ?').bind(id).run();
+  return jsonResponse({ ok: true });
+}
+
 async function handleEditPage(request, env, id) {
   if (!(await isAuthed(request, env))) return htmlResponse(loginPage(null));
   await ensureSchema(env);
@@ -1393,6 +1402,9 @@ export default {
       if (path === '/api/admin/products' && request.method === 'POST') return handleApiUpload(request, env);
       if (path.startsWith('/api/admin/products/') && request.method === 'POST') {
         return handleApiEdit(request, env, parseInt(path.slice('/api/admin/products/'.length), 10));
+      }
+      if (path.startsWith('/api/admin/products/') && request.method === 'DELETE') {
+        return handleApiDelete(request, env, parseInt(path.slice('/api/admin/products/'.length), 10));
       }
       if (path.startsWith('/api/click/') && request.method === 'POST') return handleClick(env, path);
       if (path === '/api/admin/youtube/upload' && request.method === 'POST') return handleApiYoutubeUpload(request, env);
