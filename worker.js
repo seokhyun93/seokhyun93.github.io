@@ -784,64 +784,13 @@ async function handleImage(env, path) {
   });
 }
 
-let tossToken = null;
-let tossTokenExpiresAt = 0;
-
-async function getTossToken(env, forceRefresh = false) {
-  if (!forceRefresh && tossToken && Date.now() < tossTokenExpiresAt) return tossToken;
-  const resp = await fetch('https://oauth2.cert.toss.im/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'client_credentials',
-      client_id: env.TOSS_ACCESS_KEY,
-      client_secret: env.TOSS_SECRET_KEY,
-      scope: 'sharelink:read sharelink:write',
-    }),
-  });
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`토스 토큰 발급 실패 (${resp.status}): ${text.slice(0, 200)}`);
-  }
-  const data = await resp.json();
-  tossToken = data.access_token;
-  tossTokenExpiresAt = Date.now() + (data.expires_in || 3000) * 1000 - 60000;
-  return tossToken;
-}
-
-async function tossRequest(env, method, path, { params, body, _retry } = {}) {
-  const token = await getTossToken(env);
-  let url = `https://sharelink.toss.im${path}`;
-  if (params) url += '?' + new URLSearchParams(params).toString();
-
-  const resp = await fetch(url, {
-    method,
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-
-  if (resp.status === 401 && !_retry) {
-    await getTossToken(env, true);
-    return tossRequest(env, method, path, { params, body, _retry: true });
-  }
-
-  const data = await resp.json();
-  if (data.resultType === 'FAIL') {
-    const err = data.error || {};
-    throw new Error(`토스 API 오류 [${err.errorCode}] ${err.reason || ''}`);
-  }
-  return data.success;
-}
-
-async function tossGetTodayDeals(env, size = 20) {
-  return tossRequest(env, 'GET', '/openapi/products/today-deals', { params: { size: String(size) } });
-}
-
-async function tossIssueShareLink(env, tacaItemId) {
-  return tossRequest(env, 'POST', '/openapi/links', {
-    body: { tacaItemId, publisherId: env.TOSS_PUBLISHER_ID },
-  });
-}
+// NOTE: 토스 Sharelink Open API는 고정 IP 등록이 필요해서 Cloudflare Worker에서
+// 직접 호출하지 못한다 (SHARELINK_OPENAPI_ACCESS_DENIED). 그래서 토스 API 호출은
+// 로컬 스크립트(sync_today_deals.py, 허용된 IP)가 대신 하고, 이 Worker는 그
+// 결과 데이터만 받아서 D1에 반영하는 handleApiTodayDealsSync만 남겨뒀다.
+// 과거에 여기서 직접 토스 API를 호출하던 크론(scheduled)이 있었는데, 실패하는
+// 호출 앞에서 카테고리부터 지워버려 오늘 최저가 데이터가 통째로 날아가는 사고가
+// 있었다 — 크론과 그 코드는 제거함, 절대 다시 추가하지 말 것.
 
 async function clearTodayDealCategory(env) {
   await ensureSchema(env);
@@ -864,23 +813,6 @@ async function upsertTodayDealItem(env, { title, thumbnailUrl, shortUrl }) {
     category: 'today_deal',
   });
   return { ok: true, title, mode: 'inserted' };
-}
-
-async function runDailyTossUpdate(env) {
-  await clearTodayDealCategory(env);
-  const deals = await tossGetTodayDeals(env, 50);
-
-  const results = [];
-  for (const item of deals.items || []) {
-    try {
-      const linkData = await tossIssueShareLink(env, item.tacaItemId);
-      const title = `🔥오늘만! ${item.displayName}`;
-      results.push(await upsertTodayDealItem(env, { title, thumbnailUrl: item.thumbnailUrl, shortUrl: linkData.shortUrl }));
-    } catch (err) {
-      results.push({ ok: false, title: item.displayName, error: err.message });
-    }
-  }
-  return results;
 }
 
 // 로컬(허용된 IP)에서 토스 API로 직접 가져온 오늘 최저가 데이터를 D1에 반영.
@@ -1469,11 +1401,6 @@ export default {
       if (path === '/api/admin/instagram/status' && request.method === 'GET') return handleApiInstagramStatus(request, env, url);
       if (path === '/api/admin/instagram/media_publish' && request.method === 'POST') return handleApiInstagramMediaPublish(request, env);
       if (path === '/api/admin/today-deals/sync' && request.method === 'POST') return handleApiTodayDealsSync(request, env);
-      if (path === '/api/admin/run-daily-toss-update' && request.method === 'POST') {
-        if (!checkApiToken(request, env)) return jsonResponse({ error: 'unauthorized' }, 401);
-        const results = await runDailyTossUpdate(env);
-        return jsonResponse({ results });
-      }
 
       if (path.startsWith('/images/') && request.method === 'GET') return handleImage(env, path);
 
@@ -1481,9 +1408,5 @@ export default {
     } catch (err) {
       return new Response('Server error: ' + (err && err.message ? err.message : String(err)), { status: 500 });
     }
-  },
-
-  async scheduled(event, env, ctx) {
-    ctx.waitUntil(runDailyTossUpdate(env));
   },
 };
