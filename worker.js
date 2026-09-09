@@ -39,7 +39,17 @@ async function hashVisitor(request) {
 
 async function recordVisit(env, request) {
   try {
+    // coupanggoodthings.com으로 들어온 것만 집계 (workers.dev 주소나 테스트성 접속은 제외)
+    const host = new URL(request.url).hostname;
+    if (host !== 'coupanggoodthings.com') return;
+
     await ensureSchema(env);
+    if (await isAuthed(request, env)) return; // 관리자 로그인 상태의 방문은 제외
+
+    const ip = request.headers.get('CF-Connecting-IP') || '';
+    const ownerIp = await getSetting(env, 'owner_ip');
+    if (ownerIp && ip && ownerIp === ip) return; // 등록해둔 운영자 본인 IP는 제외
+
     const hash = await hashVisitor(request);
     await env.DB.prepare('INSERT INTO visits (visited_at, visitor_hash) VALUES (?, ?)').bind(Date.now(), hash).run();
   } catch (err) {
@@ -59,10 +69,21 @@ async function handleVisitStats(request, env) {
      ORDER BY day DESC
      LIMIT 30`
   ).all();
-  return htmlResponse(visitStatsPage(results));
+  const ownerIp = await getSetting(env, 'owner_ip');
+  const currentIp = request.headers.get('CF-Connecting-IP') || '';
+  const url = new URL(request.url);
+  return htmlResponse(visitStatsPage(results, ownerIp, currentIp, url.searchParams.get('ipRegistered') === '1'));
 }
 
-function visitStatsPage(rows) {
+async function handleRegisterOwnerIp(request, env) {
+  if (!(await isAuthed(request, env))) return htmlResponse(loginPage(null));
+  await ensureSchema(env);
+  const ip = request.headers.get('CF-Connecting-IP') || '';
+  if (ip) await setSetting(env, 'owner_ip', ip);
+  return Response.redirect('https://coupanggoodthings.com/admin/stats/visits?ipRegistered=1', 302);
+}
+
+function visitStatsPage(rows, ownerIp, currentIp, justRegistered) {
   const maxUniques = Math.max(1, ...rows.map((r) => r.uniques));
   const body = rows.map((r) => `
     <tr>
@@ -72,11 +93,22 @@ function visitStatsPage(rows) {
       <td><div style="background:#c9705a;height:10px;border-radius:4px;width:${Math.round((r.uniques / maxUniques) * 100)}%;"></div></td>
     </tr>`).join('');
 
+  const ipStatus = ownerIp
+    ? `<span style="color:#2e7d4f;">✓ ${esc(ownerIp)} 제외 중</span>${ownerIp !== currentIp ? ` <span style="color:#c0392b;">(지금 접속 IP: ${esc(currentIp)} — 다름, 아래 버튼으로 갱신하세요)</span>` : ''}`
+    : '<span style="color:#999;">등록 안 됨</span>';
+
   return page('방문자 통계', `
     <div class="wrap">
       ${navHtml('visits')}
       <h1>방문자 통계 (최근 30일)</h1>
-      <p style="font-size:12px;color:#999;margin-top:-16px;">순방문자는 IP+기기 정보를 하루 단위로 해시해서 집계한 추정치입니다 (개인 식별 아님, 날짜를 넘어서는 추적 안 됨).</p>
+      <p style="font-size:12px;color:#999;margin-top:-16px;">순방문자는 IP+기기 정보를 하루 단위로 해시해서 집계한 추정치입니다 (개인 식별 아님, 날짜를 넘어서는 추적 안 됨). coupanggoodthings.com으로 들어온 방문, 관리자 로그인 상태가 아닌 방문만 집계됩니다.</p>
+      ${justRegistered ? '<div class="success">현재 IP를 방문 집계 제외 목록에 등록했습니다.</div>' : ''}
+      <div style="display:flex;align-items:center;gap:10px;font-size:12.5px;margin-bottom:20px;">
+        <strong>운영자 IP 제외</strong> ${ipStatus}
+        <form method="POST" action="/admin/stats/visits/register-ip" style="margin:0;">
+          <button type="submit" class="secondary" style="margin:0;">지금 내 IP 등록/갱신</button>
+        </form>
+      </div>
       <table>
         <thead><tr><th>날짜</th><th>순방문자</th><th>페이지뷰</th><th></th></tr></thead>
         <tbody>${body || '<tr><td colspan="4" style="color:#bbb;">아직 방문 기록이 없습니다.</td></tr>'}</tbody>
@@ -1471,6 +1503,7 @@ export default {
       if (path === '/admin/upload' && request.method === 'POST') return handleUpload(request, env);
       if (path === '/admin/stats' && request.method === 'GET') return handleStats(request, env);
       if (path === '/admin/stats/visits' && request.method === 'GET') return handleVisitStats(request, env);
+      if (path === '/admin/stats/visits/register-ip' && request.method === 'POST') return handleRegisterOwnerIp(request, env);
       if (path === '/admin/products' && request.method === 'GET') return handleProductsPage(request, env, url);
       if (path === '/admin/youtube/connect' && request.method === 'GET') return handleYoutubeConnect(request, env);
       if (path === '/admin/youtube/callback' && request.method === 'GET') return handleYoutubeCallback(request, env, url);
