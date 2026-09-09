@@ -19,7 +19,70 @@ async function ensureSchema(env) {
   await env.DB.prepare(
     'CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)'
   ).run();
+  await env.DB.prepare(
+    'CREATE TABLE IF NOT EXISTS visits (id INTEGER PRIMARY KEY AUTOINCREMENT, visited_at INTEGER NOT NULL, visitor_hash TEXT NOT NULL)'
+  ).run();
   schemaReady = true;
+}
+
+// 방문자를 IP+UA+날짜로 해시해서 익명 식별자를 만든다. 날짜를 섞어서 하루 지나면
+// 같은 사람이어도 다른 해시가 나오게 함 (그날 하루의 순방문자 집계에만 쓰고,
+// 날짜를 넘어서 개인을 추적할 수는 없게 하기 위함).
+async function hashVisitor(request) {
+  const ip = request.headers.get('CF-Connecting-IP') || '';
+  const ua = request.headers.get('User-Agent') || '';
+  const day = new Date().toISOString().slice(0, 10);
+  const data = new TextEncoder().encode(`${ip}|${ua}|${day}`);
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
+}
+
+async function recordVisit(env, request) {
+  try {
+    await ensureSchema(env);
+    const hash = await hashVisitor(request);
+    await env.DB.prepare('INSERT INTO visits (visited_at, visitor_hash) VALUES (?, ?)').bind(Date.now(), hash).run();
+  } catch (err) {
+    // 방문 기록 실패가 실제 페이지 로딩을 막으면 안 되므로 무시
+  }
+}
+
+async function handleVisitStats(request, env) {
+  if (!(await isAuthed(request, env))) return htmlResponse(loginPage(null));
+  await ensureSchema(env);
+  const { results } = await env.DB.prepare(
+    `SELECT date((visited_at / 1000) + 32400, 'unixepoch') as day,
+            COUNT(*) as pageviews,
+            COUNT(DISTINCT visitor_hash) as uniques
+     FROM visits
+     GROUP BY day
+     ORDER BY day DESC
+     LIMIT 30`
+  ).all();
+  return htmlResponse(visitStatsPage(results));
+}
+
+function visitStatsPage(rows) {
+  const maxUniques = Math.max(1, ...rows.map((r) => r.uniques));
+  const body = rows.map((r) => `
+    <tr>
+      <td>${esc(r.day)}</td>
+      <td>${r.uniques}명</td>
+      <td>${r.pageviews}회</td>
+      <td><div style="background:#c9705a;height:10px;border-radius:4px;width:${Math.round((r.uniques / maxUniques) * 100)}%;"></div></td>
+    </tr>`).join('');
+
+  return page('방문자 통계', `
+    <div class="wrap">
+      ${navHtml('visits')}
+      <h1>방문자 통계 (최근 30일)</h1>
+      <p style="font-size:12px;color:#999;margin-top:-16px;">순방문자는 IP+기기 정보를 하루 단위로 해시해서 집계한 추정치입니다 (개인 식별 아님, 날짜를 넘어서는 추적 안 됨).</p>
+      <table>
+        <thead><tr><th>날짜</th><th>순방문자</th><th>페이지뷰</th><th></th></tr></thead>
+        <tbody>${body || '<tr><td colspan="4" style="color:#bbb;">아직 방문 기록이 없습니다.</td></tr>'}</tbody>
+      </table>
+    </div>
+  `);
 }
 
 async function getSetting(env, key) {
@@ -258,6 +321,7 @@ function navHtml(active) {
       ${tab('/admin', '업로드', 'upload')}
       ${tab('/admin/products', '최근 업로드', 'products')}
       ${tab('/admin/stats', '클릭 통계', 'stats')}
+      ${tab('/admin/stats/visits', '방문자 통계', 'visits')}
       ${tab('/admin/youtube/upload', '영상 업로드', 'youtube')}
       ${tab('/admin/instagram/upload', '인스타 업로드', 'instagram')}
       <form method="POST" action="/admin/logout" style="margin-left:auto;">
@@ -1389,16 +1453,21 @@ async function handleApiInstagramMediaPublish(request, env) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
 
     try {
+      if (path === '/' && request.method === 'GET') {
+        ctx.waitUntil(recordVisit(env, request));
+        return env.ASSETS.fetch(request);
+      }
       if (path === '/admin' && request.method === 'GET') return handleAdminHome(request, env, url);
       if (path === '/admin/login' && request.method === 'POST') return handleLogin(request, env);
       if (path === '/admin/logout' && request.method === 'POST') return handleLogout();
       if (path === '/admin/upload' && request.method === 'POST') return handleUpload(request, env);
       if (path === '/admin/stats' && request.method === 'GET') return handleStats(request, env);
+      if (path === '/admin/stats/visits' && request.method === 'GET') return handleVisitStats(request, env);
       if (path === '/admin/products' && request.method === 'GET') return handleProductsPage(request, env, url);
       if (path === '/admin/youtube/connect' && request.method === 'GET') return handleYoutubeConnect(request, env);
       if (path === '/admin/youtube/callback' && request.method === 'GET') return handleYoutubeCallback(request, env, url);
