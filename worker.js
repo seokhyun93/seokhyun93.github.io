@@ -851,10 +851,13 @@ async function handleClick(env, path) {
   return jsonResponse({ ok: true });
 }
 
-async function handleImage(env, path) {
+async function handleImage(env, path, request) {
   const key = decodeURIComponent(path.slice('/images/'.length));
   const obj = await env.IMAGES.get(key);
-  if (!obj) return new Response('Not Found', { status: 404 });
+  if (!obj) {
+    // R2에 없으면(예: avatar.png처럼 저장소에 올린 적 없는 정적 파일) 정적 에셋으로 폴백.
+    return env.ASSETS.fetch(request);
+  }
   return new Response(obj.body, {
     headers: {
       'Content-Type': obj.httpMetadata?.contentType || 'application/octet-stream',
@@ -1504,7 +1507,7 @@ export default {
       if (path === '/api/admin/instagram/media_publish' && request.method === 'POST') return handleApiInstagramMediaPublish(request, env);
       if (path === '/api/admin/today-deals/sync' && request.method === 'POST') return handleApiTodayDealsSync(request, env);
 
-      if (path.startsWith('/images/') && request.method === 'GET') return handleImage(env, path);
+      if (path.startsWith('/images/') && request.method === 'GET') return handleImage(env, path, request);
 
       return env.ASSETS.fetch(request);
     } catch (err) {
