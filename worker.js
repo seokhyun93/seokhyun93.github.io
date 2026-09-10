@@ -22,6 +22,9 @@ async function ensureSchema(env) {
   await env.DB.prepare(
     'CREATE TABLE IF NOT EXISTS visits (id INTEGER PRIMARY KEY AUTOINCREMENT, visited_at INTEGER NOT NULL, visitor_hash TEXT NOT NULL)'
   ).run();
+  await env.DB.prepare(
+    'CREATE TABLE IF NOT EXISTS click_events (id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER NOT NULL, clicked_at INTEGER NOT NULL)'
+  ).run();
   schemaReady = true;
 }
 
@@ -605,13 +608,21 @@ function editPage(product, errorParam) {
   `, imageFormScript(false));
 }
 
-function statsPage(products) {
+function statsPage(products, recentClicks) {
   const rows = products.map((p) => `
     <tr>
       <td><img class="thumb" src="${esc(p.image)}" alt="" referrerpolicy="no-referrer"></td>
       <td>${esc(p.title)}</td>
       <td>${p.clicks}</td>
       <td>${new Date(p.createdAt).toLocaleDateString('ko-KR')}</td>
+    </tr>`).join('');
+
+  const recentRows = (recentClicks || []).map((r) => `
+    <tr>
+      <td>${esc(r.day)}</td>
+      <td>${esc(r.title)}</td>
+      <td>${r.cnt}회</td>
+      <td>${new Date(r.lastClickedAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</td>
     </tr>`).join('');
 
   return page('클릭 통계', `
@@ -621,6 +632,13 @@ function statsPage(products) {
       <table>
         <thead><tr><th></th><th>상품명</th><th>클릭수</th><th>등록일</th></tr></thead>
         <tbody>${rows || '<tr><td colspan="4" style="color:#bbb;">아직 상품이 없습니다.</td></tr>'}</tbody>
+      </table>
+
+      <h1 style="margin-top:48px;">날짜별 클릭 내역</h1>
+      <p style="font-size:12px;color:#999;margin-top:-16px;">어떤 상품이 언제 클릭됐는지 날짜별로 보여줍니다. 시간은 그날 마지막으로 클릭된 시각(한국시간)입니다.</p>
+      <table>
+        <thead><tr><th>날짜</th><th>상품명</th><th>클릭수</th><th>마지막 클릭</th></tr></thead>
+        <tbody>${recentRows || '<tr><td colspan="4" style="color:#bbb;">아직 클릭 기록이 없습니다.</td></tr>'}</tbody>
       </table>
     </div>
   `);
@@ -657,7 +675,18 @@ async function handleStats(request, env) {
   }
   await ensureSchema(env);
   const { results } = await env.DB.prepare('SELECT * FROM products ORDER BY clicks DESC, created_at DESC LIMIT 200').all();
-  return htmlResponse(statsPage(results.map(normalizeRow)));
+  const { results: recentClicks } = await env.DB.prepare(
+    `SELECT date((ce.clicked_at / 1000) + 32400, 'unixepoch') as day,
+            p.title as title,
+            COUNT(*) as cnt,
+            MAX(ce.clicked_at) as lastClickedAt
+     FROM click_events ce
+     JOIN products p ON p.id = ce.product_id
+     GROUP BY day, ce.product_id
+     ORDER BY day DESC, cnt DESC
+     LIMIT 200`
+  ).all();
+  return htmlResponse(statsPage(results.map(normalizeRow), recentClicks));
 }
 
 async function handleLogin(request, env) {
@@ -943,6 +972,7 @@ async function handleClick(env, path) {
   const id = parseInt(path.slice('/api/click/'.length), 10);
   if (!id) return new Response('Bad Request', { status: 400 });
   await env.DB.prepare('UPDATE products SET clicks = clicks + 1 WHERE id = ?').bind(id).run();
+  await env.DB.prepare('INSERT INTO click_events (product_id, clicked_at) VALUES (?, ?)').bind(id, Date.now()).run();
   return jsonResponse({ ok: true });
 }
 
