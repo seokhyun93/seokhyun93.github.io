@@ -291,8 +291,11 @@ function baseStyle() {
     .nav a { color:#666; text-decoration:none; }
     .nav a.active { color:#141414; font-weight:700; }
     table { width:100%; border-collapse:collapse; margin-top:16px; font-size:12.5px; }
-    th, td { text-align:left; padding:8px 6px; border-bottom:1px solid #f0f0f0; }
+    th, td { text-align:left; padding:8px 6px; border-bottom:1px solid #f0f0f0; vertical-align:middle; }
     th { color:#999; font-weight:500; }
+    .products-table { table-layout:fixed; }
+    .products-table th, .products-table td { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .products-table th:first-child, .products-table td:first-child { white-space:normal; overflow:visible; }
     .thumb { width:36px; height:36px; object-fit:cover; border-radius:4px; background:#fafafa; border:1px solid #f0f0f0; }
     .link-row { display:flex; gap:8px; }
     .link-row input { flex:1; }
@@ -562,7 +565,14 @@ function productsPage(rows, pageNum, totalPages, origin) {
     <div class="wrap">
       ${navHtml('products')}
       <h1>최근 업로드</h1>
-      <table>
+      <table class="products-table">
+        <colgroup>
+          <col>
+          <col style="width:64px;">
+          <col style="width:100px;">
+          <col style="width:48px;">
+          <col style="width:76px;">
+        </colgroup>
         <thead><tr><th>상품명</th><th>클릭수</th><th>등록일</th><th></th><th></th></tr></thead>
         <tbody>${body || '<tr><td colspan="5" style="color:#bbb;">아직 업로드된 상품이 없습니다.</td></tr>'}</tbody>
       </table>
