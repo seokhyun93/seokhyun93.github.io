@@ -1588,7 +1588,23 @@ export default {
     try {
       if (path === '/' && request.method === 'GET') {
         ctx.waitUntil(recordVisit(env, request));
-        return env.ASSETS.fetch(request);
+        const response = await env.ASSETS.fetch(request);
+        await ensureSchema(env);
+        const ip = request.headers.get('CF-Connecting-IP') || '';
+        const ownerIps = await getOwnerIps(env);
+        if (ip && ownerIps.includes(ip)) {
+          return new HTMLRewriter()
+            .on('body', {
+              element(el) {
+                el.prepend(
+                  '<a href="/admin" style="position:fixed;top:10px;right:10px;z-index:9999;background:#141414;color:#fff;font-size:12px;font-weight:700;padding:8px 14px;border-radius:999px;text-decoration:none;box-shadow:0 2px 8px rgba(0,0,0,0.2);">어드민으로 들어가기</a>',
+                  { html: true }
+                );
+              },
+            })
+            .transform(response);
+        }
+        return response;
       }
       if (path === '/admin' && request.method === 'GET') return handleAdminHome(request, env, url);
       if (path === '/admin/login' && request.method === 'POST') return handleLogin(request, env);
