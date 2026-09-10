@@ -37,6 +37,21 @@ async function hashVisitor(request) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
 }
 
+async function getOwnerIps(env) {
+  const raw = await getSetting(env, 'owner_ips');
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+async function setOwnerIps(env, ips) {
+  await setSetting(env, 'owner_ips', JSON.stringify(ips));
+}
+
 async function recordVisit(env, request) {
   try {
     // coupanggoodthings.com으로 들어온 것만 집계 (workers.dev 주소나 테스트성 접속은 제외)
@@ -47,8 +62,8 @@ async function recordVisit(env, request) {
     if (await isAuthed(request, env)) return; // 관리자 로그인 상태의 방문은 제외
 
     const ip = request.headers.get('CF-Connecting-IP') || '';
-    const ownerIp = await getSetting(env, 'owner_ip');
-    if (ownerIp && ip && ownerIp === ip) return; // 등록해둔 운영자 본인 IP는 제외
+    const ownerIps = await getOwnerIps(env);
+    if (ip && ownerIps.includes(ip)) return; // 등록해둔 운영자 IP는 제외
 
     const hash = await hashVisitor(request);
     await env.DB.prepare('INSERT INTO visits (visited_at, visitor_hash) VALUES (?, ?)').bind(Date.now(), hash).run();
@@ -69,21 +84,58 @@ async function handleVisitStats(request, env) {
      ORDER BY day DESC
      LIMIT 30`
   ).all();
-  const ownerIp = await getSetting(env, 'owner_ip');
+  const ownerIps = await getOwnerIps(env);
   const currentIp = request.headers.get('CF-Connecting-IP') || '';
   const url = new URL(request.url);
-  return htmlResponse(visitStatsPage(results, ownerIp, currentIp, url.searchParams.get('ipRegistered') === '1'));
+  return htmlResponse(visitStatsPage(results, ownerIps, currentIp, url.searchParams.get('ipRegistered') === '1'));
 }
 
 async function handleRegisterOwnerIp(request, env) {
   if (!(await isAuthed(request, env))) return htmlResponse(loginPage(null));
   await ensureSchema(env);
   const ip = request.headers.get('CF-Connecting-IP') || '';
-  if (ip) await setSetting(env, 'owner_ip', ip);
+  if (ip) {
+    const ips = await getOwnerIps(env);
+    if (!ips.includes(ip)) {
+      ips.push(ip);
+      await setOwnerIps(env, ips);
+    }
+  }
   return Response.redirect('https://coupanggoodthings.com/admin/stats/visits?ipRegistered=1', 302);
 }
 
-function visitStatsPage(rows, ownerIp, currentIp, justRegistered) {
+async function handleRemoveOwnerIp(request, env) {
+  if (!(await isAuthed(request, env))) return htmlResponse(loginPage(null));
+  await ensureSchema(env);
+  const form = await request.formData();
+  const ipToRemove = (form.get('ip') || '').toString();
+  const ips = (await getOwnerIps(env)).filter((x) => x !== ipToRemove);
+  await setOwnerIps(env, ips);
+  return Response.redirect('https://coupanggoodthings.com/admin/stats/visits', 302);
+}
+
+// 로컬 스크립트/관리자가 특정 IP를 직접 제외 목록에 추가할 수 있는 토큰 인증 API.
+// (예: 사장님이 여러 네트워크의 공인 IP를 알려줄 때, 그 IP로 접속해서 버튼을 누르지
+// 않아도 바로 등록할 수 있게)
+async function handleApiAddOwnerIps(request, env) {
+  if (!checkApiToken(request, env)) return jsonResponse({ error: 'unauthorized' }, 401);
+  await ensureSchema(env);
+  try {
+    const body = await request.json();
+    const toAdd = Array.isArray(body.ips) ? body.ips : [body.ip].filter(Boolean);
+    const ips = await getOwnerIps(env);
+    for (const ip of toAdd) {
+      const trimmed = (ip || '').toString().trim();
+      if (trimmed && !ips.includes(trimmed)) ips.push(trimmed);
+    }
+    await setOwnerIps(env, ips);
+    return jsonResponse({ ok: true, ips });
+  } catch (err) {
+    return jsonResponse({ error: err && err.message ? err.message : String(err) }, 500);
+  }
+}
+
+function visitStatsPage(rows, ownerIps, currentIp, justRegistered) {
   const maxUniques = Math.max(1, ...rows.map((r) => r.uniques));
   const body = rows.map((r) => `
     <tr>
@@ -93,9 +145,19 @@ function visitStatsPage(rows, ownerIp, currentIp, justRegistered) {
       <td><div style="background:#c9705a;height:10px;border-radius:4px;width:${Math.round((r.uniques / maxUniques) * 100)}%;"></div></td>
     </tr>`).join('');
 
-  const ipStatus = ownerIp
-    ? `<span style="color:#2e7d4f;">✓ ${esc(ownerIp)} 제외 중</span>${ownerIp !== currentIp ? ` <span style="color:#c0392b;">(지금 접속 IP: ${esc(currentIp)} — 다름, 아래 버튼으로 갱신하세요)</span>` : ''}`
+  const ipList = ownerIps.length
+    ? ownerIps.map((ip) => `
+        <span style="display:inline-flex;align-items:center;gap:6px;background:#f3f8f4;color:#2e7d4f;border-radius:999px;padding:4px 6px 4px 12px;margin:0 6px 6px 0;font-size:12px;">
+          ${esc(ip)}
+          <form method="POST" action="/admin/stats/visits/remove-ip" style="margin:0;">
+            <input type="hidden" name="ip" value="${esc(ip)}">
+            <button type="submit" class="secondary" style="margin:0;color:#2e7d4f;">✕</button>
+          </form>
+        </span>`).join('')
     : '<span style="color:#999;">등록 안 됨</span>';
+  const currentIpNote = currentIp && !ownerIps.includes(currentIp)
+    ? `<span style="color:#c0392b;">(지금 접속 IP: ${esc(currentIp)} — 목록에 없음)</span>`
+    : '';
 
   return page('방문자 통계', `
     <div class="wrap">
@@ -103,10 +165,11 @@ function visitStatsPage(rows, ownerIp, currentIp, justRegistered) {
       <h1>방문자 통계 (최근 30일)</h1>
       <p style="font-size:12px;color:#999;margin-top:-16px;">순방문자는 IP+기기 정보를 하루 단위로 해시해서 집계한 추정치입니다 (개인 식별 아님, 날짜를 넘어서는 추적 안 됨). coupanggoodthings.com으로 들어온 방문, 관리자 로그인 상태가 아닌 방문만 집계됩니다.</p>
       ${justRegistered ? '<div class="success">현재 IP를 방문 집계 제외 목록에 등록했습니다.</div>' : ''}
-      <div style="display:flex;align-items:center;gap:10px;font-size:12.5px;margin-bottom:20px;">
-        <strong>운영자 IP 제외</strong> ${ipStatus}
-        <form method="POST" action="/admin/stats/visits/register-ip" style="margin:0;">
-          <button type="submit" class="secondary" style="margin:0;">지금 내 IP 등록/갱신</button>
+      <div style="margin-bottom:20px;">
+        <div style="font-size:12.5px;margin-bottom:8px;"><strong>운영자 IP 제외 목록</strong> ${currentIpNote}</div>
+        <div>${ipList}</div>
+        <form method="POST" action="/admin/stats/visits/register-ip" style="margin-top:6px;">
+          <button type="submit" class="secondary" style="margin:0;">지금 내 IP 추가</button>
         </form>
       </div>
       <table>
@@ -1504,6 +1567,7 @@ export default {
       if (path === '/admin/stats' && request.method === 'GET') return handleStats(request, env);
       if (path === '/admin/stats/visits' && request.method === 'GET') return handleVisitStats(request, env);
       if (path === '/admin/stats/visits/register-ip' && request.method === 'POST') return handleRegisterOwnerIp(request, env);
+      if (path === '/admin/stats/visits/remove-ip' && request.method === 'POST') return handleRemoveOwnerIp(request, env);
       if (path === '/admin/products' && request.method === 'GET') return handleProductsPage(request, env, url);
       if (path === '/admin/youtube/connect' && request.method === 'GET') return handleYoutubeConnect(request, env);
       if (path === '/admin/youtube/callback' && request.method === 'GET') return handleYoutubeCallback(request, env, url);
@@ -1525,6 +1589,7 @@ export default {
 
       if (path === '/sitemap.xml' && request.method === 'GET') return handleSitemap(env);
       if (path === '/api/products' && request.method === 'GET') return handleListProducts(env, url);
+      if (path === '/api/admin/owner-ips' && request.method === 'POST') return handleApiAddOwnerIps(request, env);
       if (path === '/api/admin/products' && request.method === 'POST') return handleApiUpload(request, env);
       if (path.startsWith('/api/admin/products/') && request.method === 'POST') {
         return handleApiEdit(request, env, parseInt(path.slice('/api/admin/products/'.length), 10));
