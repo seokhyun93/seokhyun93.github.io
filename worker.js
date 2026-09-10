@@ -1557,6 +1557,19 @@ async function handleApiVideoUpload(request, env) {
   return jsonResponse({ url: videoUrl });
 }
 
+// 로컬 파일(스크린샷 등)을 상품 이미지로 바로 올릴 수 있는 토큰 인증 API.
+async function handleApiImageUpload(request, env) {
+  if (!checkApiToken(request, env)) return jsonResponse({ error: 'unauthorized' }, 401);
+  await ensureSchema(env);
+  const form = await request.formData();
+  const file = form.get('image');
+  if (!file || typeof file === 'string') return jsonResponse({ error: 'image is required' }, 400);
+  const ext = (file.type && file.type.split('/')[1]) || 'jpg';
+  const key = `products/${crypto.randomUUID()}.${ext}`;
+  await env.IMAGES.put(key, await file.arrayBuffer(), { httpMetadata: { contentType: file.type || 'image/jpeg' } });
+  return jsonResponse({ url: `https://coupanggoodthings.com/images/${key}` });
+}
+
 async function handleApiInstagramPublish(request, env) {
   if (!checkApiToken(request, env)) return jsonResponse({ error: 'unauthorized' }, 401);
   try {
@@ -1656,6 +1669,7 @@ export default {
       if (path.startsWith('/api/click/') && request.method === 'POST') return handleClick(env, path);
       if (path === '/api/admin/youtube/upload' && request.method === 'POST') return handleApiYoutubeUpload(request, env);
       if (path === '/api/admin/videos' && request.method === 'POST') return handleApiVideoUpload(request, env);
+      if (path === '/api/admin/images' && request.method === 'POST') return handleApiImageUpload(request, env);
       if (path === '/api/admin/instagram/publish' && request.method === 'POST') return handleApiInstagramPublish(request, env);
       if (path === '/api/admin/instagram/status' && request.method === 'GET') return handleApiInstagramStatus(request, env, url);
       if (path === '/api/admin/instagram/media_publish' && request.method === 'POST') return handleApiInstagramMediaPublish(request, env);
