@@ -55,11 +55,17 @@ async function setOwnerIps(env, ips) {
   await setSetting(env, 'owner_ips', JSON.stringify(ips));
 }
 
+// 검색엔진 크롤러, curl/스크립트류 접속을 방문자 통계에서 걸러내기 위한 패턴.
+const BOT_UA_RE = /bot|crawl|spider|slurp|curl|wget|python-requests|python-urllib|scrapy|headless|phantomjs|facebookexternalhit|yeti|daumoa|okhttp|axios|node-fetch|go-http-client|java\//i;
+
 async function recordVisit(env, request) {
   try {
     // coupanggoodthings.com으로 들어온 것만 집계 (workers.dev 주소나 테스트성 접속은 제외)
     const host = new URL(request.url).hostname;
     if (host !== 'coupanggoodthings.com') return;
+
+    const ua = request.headers.get('User-Agent') || '';
+    if (!ua || BOT_UA_RE.test(ua)) return; // 봇/크롤러/스크립트 접속 제외
 
     await ensureSchema(env);
     if (await isAuthed(request, env)) return; // 관리자 로그인 상태의 방문은 제외
