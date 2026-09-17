@@ -22,6 +22,11 @@ async function ensureSchema(env) {
   await env.DB.prepare(
     'CREATE TABLE IF NOT EXISTS visits (id INTEGER PRIMARY KEY AUTOINCREMENT, visited_at INTEGER NOT NULL, visitor_hash TEXT NOT NULL)'
   ).run();
+  try {
+    await env.DB.prepare('ALTER TABLE visits ADD COLUMN source TEXT').run();
+  } catch (e) {
+    // column already exists
+  }
   await env.DB.prepare(
     'CREATE TABLE IF NOT EXISTS click_events (id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER NOT NULL, clicked_at INTEGER NOT NULL)'
   ).run();
@@ -58,11 +63,38 @@ async function setOwnerIps(env, ips) {
 // 검색엔진 크롤러, curl/스크립트류 접속을 방문자 통계에서 걸러내기 위한 패턴.
 const BOT_UA_RE = /bot|crawl|spider|slurp|curl|wget|python-requests|python-urllib|scrapy|headless|phantomjs|facebookexternalhit|yeti|daumoa|okhttp|axios|node-fetch|go-http-client|java\//i;
 
+// 알려진 플랫폼 도메인 패턴 → 표시 이름. Referer 헤더로 유입 경로를 짐작할 때 씀
+// (인앱 브라우저는 Referer를 지우는 경우가 많아서 완전하진 않음. 정확도를 높이려면
+// 각 플랫폼 링크에 ?src=youtube 같은 파라미터를 붙여서 쓰는 걸 권장함).
+const REFERRER_SOURCE_PATTERNS = [
+  [/youtube\.com|youtu\.be/i, 'youtube'],
+  [/instagram\.com|l\.instagram\.com/i, 'instagram'],
+  [/threads\.net|threads\.com/i, 'threads'],
+  [/blog\.naver\.com|naver\.me|m\.naver\.com|search\.naver\.com/i, 'naver'],
+  [/tiktok\.com/i, 'tiktok'],
+  [/google\./i, 'google'],
+  [/coupang\.com/i, 'coupang'],
+];
+
+function detectVisitSource(url, request) {
+  const explicit = (url.searchParams.get('src') || url.searchParams.get('utm_source') || '').toLowerCase().trim();
+  if (explicit) return explicit;
+
+  const referrer = request.headers.get('Referer') || '';
+  if (referrer) {
+    for (const [pattern, name] of REFERRER_SOURCE_PATTERNS) {
+      if (pattern.test(referrer)) return name;
+    }
+    return 'other';
+  }
+  return 'direct'; // 링크 표시도 없고 리퍼러도 없음 (즐겨찾기, 직접 입력, 인앱 브라우저 등)
+}
+
 async function recordVisit(env, request) {
   try {
+    const url = new URL(request.url);
     // coupanggoodthings.com으로 들어온 것만 집계 (workers.dev 주소나 테스트성 접속은 제외)
-    const host = new URL(request.url).hostname;
-    if (host !== 'coupanggoodthings.com') return;
+    if (url.hostname !== 'coupanggoodthings.com') return;
 
     const ua = request.headers.get('User-Agent') || '';
     if (!ua || BOT_UA_RE.test(ua)) return; // 봇/크롤러/스크립트 접속 제외
@@ -74,8 +106,9 @@ async function recordVisit(env, request) {
     const ownerIps = await getOwnerIps(env);
     if (ip && ownerIps.includes(ip)) return; // 등록해둔 운영자 IP는 제외
 
+    const source = detectVisitSource(url, request);
     const hash = await hashVisitor(request);
-    await env.DB.prepare('INSERT INTO visits (visited_at, visitor_hash) VALUES (?, ?)').bind(Date.now(), hash).run();
+    await env.DB.prepare('INSERT INTO visits (visited_at, visitor_hash, source) VALUES (?, ?, ?)').bind(Date.now(), hash, source).run();
   } catch (err) {
     // 방문 기록 실패가 실제 페이지 로딩을 막으면 안 되므로 무시
   }
@@ -93,10 +126,19 @@ async function handleVisitStats(request, env) {
      ORDER BY day DESC
      LIMIT 30`
   ).all();
+  const { results: bySource } = await env.DB.prepare(
+    `SELECT COALESCE(source, 'direct') as source,
+            COUNT(*) as pageviews,
+            COUNT(DISTINCT visitor_hash) as uniques
+     FROM visits
+     WHERE visited_at > ?
+     GROUP BY source
+     ORDER BY uniques DESC`
+  ).bind(Date.now() - 30 * 24 * 60 * 60 * 1000).all();
   const ownerIps = await getOwnerIps(env);
   const currentIp = request.headers.get('CF-Connecting-IP') || '';
   const url = new URL(request.url);
-  return htmlResponse(visitStatsPage(results, ownerIps, currentIp, url.searchParams.get('ipRegistered') === '1'));
+  return htmlResponse(visitStatsPage(results, ownerIps, currentIp, url.searchParams.get('ipRegistered') === '1', bySource));
 }
 
 async function handleRegisterOwnerIp(request, env) {
@@ -144,7 +186,19 @@ async function handleApiAddOwnerIps(request, env) {
   }
 }
 
-function visitStatsPage(rows, ownerIps, currentIp, justRegistered) {
+const SOURCE_LABELS = {
+  youtube: '유튜브',
+  instagram: '인스타그램',
+  threads: '스레드',
+  naver: '네이버',
+  tiktok: '틱톡',
+  google: '구글',
+  coupang: '쿠팡',
+  direct: '직접 접속/기타',
+  other: '기타 링크',
+};
+
+function visitStatsPage(rows, ownerIps, currentIp, justRegistered, bySource) {
   const maxUniques = Math.max(1, ...rows.map((r) => r.uniques));
   const body = rows.map((r) => `
     <tr>
@@ -152,6 +206,15 @@ function visitStatsPage(rows, ownerIps, currentIp, justRegistered) {
       <td>${r.uniques}명</td>
       <td>${r.pageviews}회</td>
       <td><div style="background:#c9705a;height:10px;border-radius:4px;width:${Math.round((r.uniques / maxUniques) * 100)}%;"></div></td>
+    </tr>`).join('');
+
+  const maxSourceUniques = Math.max(1, ...(bySource || []).map((r) => r.uniques));
+  const sourceBody = (bySource || []).map((r) => `
+    <tr>
+      <td>${esc(SOURCE_LABELS[r.source] || r.source)}</td>
+      <td>${r.uniques}명</td>
+      <td>${r.pageviews}회</td>
+      <td><div style="background:#5b8fc9;height:10px;border-radius:4px;width:${Math.round((r.uniques / maxSourceUniques) * 100)}%;"></div></td>
     </tr>`).join('');
 
   const ipList = ownerIps.length
@@ -171,7 +234,7 @@ function visitStatsPage(rows, ownerIps, currentIp, justRegistered) {
   return page('방문자 통계', `
     <div class="wrap">
       ${navHtml('visits')}
-      <h1>방문자 통계 (최근 30일)</h1>
+      <h1>방문자 통계</h1>
       <p style="font-size:12px;color:#999;margin-top:-16px;">순방문자는 IP+기기 정보를 하루 단위로 해시해서 집계한 추정치입니다 (개인 식별 아님, 날짜를 넘어서는 추적 안 됨). coupanggoodthings.com으로 들어온 방문, 관리자 로그인 상태가 아닌 방문만 집계됩니다.</p>
       ${justRegistered ? '<div class="success">현재 IP를 방문 집계 제외 목록에 등록했습니다.</div>' : ''}
       <div style="margin-bottom:20px;">
@@ -181,6 +244,15 @@ function visitStatsPage(rows, ownerIps, currentIp, justRegistered) {
           <button type="submit" class="secondary" style="margin:0;">지금 내 IP 추가</button>
         </form>
       </div>
+
+      <h1 style="margin-top:40px;">유입 경로 (최근 30일)</h1>
+      <p style="font-size:12px;color:#999;margin-top:-16px;">링크 끝에 <code>?src=youtube</code> 처럼 붙여서 쓰면 정확하게 잡혀요 (예: 유튜브 설명란엔 ?src=youtube, 인스타 프로필엔 ?src=instagram). 표시가 없으면 브라우저가 보내는 리퍼러 정보로 최대한 추정하고, 그마저 없으면 "직접 접속/기타"로 잡혀요.</p>
+      <table>
+        <thead><tr><th>경로</th><th>순방문자</th><th>페이지뷰</th><th></th></tr></thead>
+        <tbody>${sourceBody || '<tr><td colspan="4" style="color:#bbb;">아직 방문 기록이 없습니다.</td></tr>'}</tbody>
+      </table>
+
+      <h1 style="margin-top:40px;">날짜별 방문 (최근 30일)</h1>
       <table>
         <thead><tr><th>날짜</th><th>순방문자</th><th>페이지뷰</th><th></th></tr></thead>
         <tbody>${body || '<tr><td colspan="4" style="color:#bbb;">아직 방문 기록이 없습니다.</td></tr>'}</tbody>
@@ -1020,13 +1092,16 @@ async function handleImage(env, path, request) {
 // 기존 today_deal 상품은 삭제한다. "오늘 특가"는 그 태그가 있을 때만 의미가
 // 있는 상품이라, 태그만 지우고 남겨두면 "전체 상품"에 정체불명 상품으로 계속
 // 쌓이기만 해서(실제로 한번 그렇게 70개 넘게 쌓였었음) 아예 삭제하는 쪽으로 바꿈.
+// 오늘 특가 목록에 새로 나온 상품만 추가(또는 기존에 있던 상품이면 정보 갱신)한다.
+// 목록에서 빠진 기존 상품은 건드리지 않고 그대로 둔다 (요청에 따라 삭제 로직 제거함 —
+// 예전엔 빠지면 자동 삭제했었는데, 지금은 사장님이 "삭제하지 말고 추가만" 하라고 하셔서
+// 이렇게 바꿈. 다시 삭제하도록 되돌리지 말 것).
 async function syncTodayDeals(env, items) {
   await ensureSchema(env);
   const { results: existingRows } = await env.DB.prepare(
     "SELECT id, link1_url FROM products WHERE category = 'today_deal'"
   ).all();
   const existingIdByLink = new Map(existingRows.map((r) => [r.link1_url, r.id]));
-  const keptIds = new Set();
 
   const results = [];
   for (const item of items) {
@@ -1036,7 +1111,6 @@ async function syncTodayDeals(env, items) {
         await env.DB.prepare(
           'UPDATE products SET title = ?, image_key = ? WHERE id = ?'
         ).bind(item.title, item.thumbnailUrl, existingId).run();
-        keptIds.add(existingId);
         results.push({ ok: true, title: item.title, mode: 'updated' });
       } else {
         await insertProduct(env, {
@@ -1053,12 +1127,7 @@ async function syncTodayDeals(env, items) {
     }
   }
 
-  const staleIds = existingRows.map((r) => r.id).filter((id) => !keptIds.has(id));
-  for (const id of staleIds) {
-    await env.DB.prepare('DELETE FROM products WHERE id = ?').bind(id).run();
-  }
-
-  return { results, deletedCount: staleIds.length };
+  return { results, deletedCount: 0 };
 }
 
 // 로컬(허용된 IP)에서 토스 API로 직접 가져온 오늘 최저가 데이터를 D1에 반영.
