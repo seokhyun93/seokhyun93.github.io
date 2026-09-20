@@ -877,6 +877,7 @@ const COUPANG_API_DOMAIN = 'https://api-gateway.coupang.com';
 const COUPANG_PATHS = {
   deeplink: '/v2/providers/affiliate_open_api/apis/openapi/v1/deeplink',
   search: '/v2/providers/affiliate_open_api/apis/openapi/products/search',
+  goldbox: '/v2/providers/affiliate_open_api/apis/openapi/v1/products/goldbox',
 };
 
 function coupangGmtDatetime() {
@@ -952,6 +953,17 @@ async function handleApiCoupangSearch(request, env, url) {
     const limit = parseInt(url.searchParams.get('limit') || '10', 10);
     if (!keyword) return jsonResponse({ error: 'keyword가 필요합니다' }, 400);
     const data = await coupangSearchProducts(env, keyword, limit);
+    return jsonResponse({ ok: true, data });
+  } catch (err) {
+    return jsonResponse({ error: err && err.message ? err.message : String(err) }, 500);
+  }
+}
+
+async function handleApiCoupangGoldbox(request, env, url) {
+  if (!checkApiToken(request, env)) return jsonResponse({ error: 'unauthorized' }, 401);
+  try {
+    const limit = parseInt(url.searchParams.get('limit') || '50', 10);
+    const data = await coupangRequest(env, 'GET', 'goldbox', { params: { limit } });
     return jsonResponse({ ok: true, data });
   } catch (err) {
     return jsonResponse({ error: err && err.message ? err.message : String(err) }, 500);
@@ -1826,6 +1838,7 @@ export default {
       if (path === '/api/admin/owner-ips' && request.method === 'POST') return handleApiAddOwnerIps(request, env);
       if (path === '/api/admin/coupang/deeplink' && request.method === 'POST') return handleApiCoupangDeeplink(request, env);
       if (path === '/api/admin/coupang/search' && request.method === 'GET') return handleApiCoupangSearch(request, env, url);
+      if (path === '/api/admin/coupang/goldbox' && request.method === 'GET') return handleApiCoupangGoldbox(request, env, url);
       if (path === '/api/admin/products' && request.method === 'POST') return handleApiUpload(request, env);
       if (path.startsWith('/api/admin/products/') && request.method === 'POST') {
         return handleApiEdit(request, env, parseInt(path.slice('/api/admin/products/'.length), 10));
