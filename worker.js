@@ -1269,7 +1269,7 @@ async function syncGoldbox(env) {
 
   const results = [];
   for (const item of items || []) {
-    const title = `🔥오늘만! ${item.productName}`;
+    const title = `오늘만! 쿠팡 ${item.productName}`;
     try {
       const existingId = existingIdByLink.get(item.productUrl);
       if (existingId) {
