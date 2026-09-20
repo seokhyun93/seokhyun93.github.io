@@ -1145,7 +1145,8 @@ async function handleListProducts(env, url) {
   if (section === 'category') {
     const category = (url.searchParams.get('category') || '').trim();
     if (!category) return jsonResponse({ items: [] });
-    const { results } = await env.DB.prepare('SELECT * FROM products WHERE category = ? ORDER BY created_at DESC LIMIT 50').bind(category).all();
+    const limit = Math.min(300, Math.max(1, parseInt(url.searchParams.get('limit') || '20', 10) || 20));
+    const { results } = await env.DB.prepare('SELECT * FROM products WHERE category = ? ORDER BY created_at DESC LIMIT ?').bind(category, limit).all();
     return jsonResponse({ items: results.map(normalizeRow) });
   }
 

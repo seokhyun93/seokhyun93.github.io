@@ -95,15 +95,32 @@
   }
   .category-header {
     margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
   }
   .category-header .title {
     font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.06em;
   }
+  .view-all {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--accent);
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    white-space: nowrap;
+  }
   .row {
-    display: flex;
-    gap: 12px;
+    display: grid;
+    grid-auto-flow: column;
+    grid-template-rows: repeat(2, auto);
+    grid-auto-columns: 108px;
+    column-gap: 12px;
+    row-gap: 20px;
     overflow-x: auto;
     padding-bottom: 2px;
     scrollbar-width: none;
@@ -130,8 +147,9 @@
   }
   .row-hint {
     position: absolute;
-    top: 42px;
+    top: 50%;
     right: 4px;
+    transform: translateY(-50%);
     width: 24px;
     height: 24px;
     border-radius: 50%;
@@ -160,7 +178,7 @@
     display: block;
   }
   .row .product-card {
-    flex: 0 0 108px;
+    width: 108px;
   }
   .product-image {
     display: block;
@@ -284,7 +302,10 @@
 
   <div id="normalSections">
     <div class="category" id="todayDealCategory" style="display:none;">
-      <div class="category-header"><div class="title">🔥오늘 최저가🔥</div></div>
+      <div class="category-header">
+        <div class="title">🔥오늘 최저가🔥</div>
+        <button type="button" class="view-all" data-category="today_deal" data-label="🔥오늘 최저가🔥">전체보기 ›</button>
+      </div>
       <div class="row-wrap">
         <div class="row" id="todayDealRow"></div>
         <div class="row-hint" aria-hidden="true">›</div>
@@ -292,7 +313,10 @@
     </div>
 
     <div class="category">
-      <div class="category-header"><div class="title">💗인기 제품💗</div></div>
+      <div class="category-header">
+        <div class="title">💗인기 제품💗</div>
+        <button type="button" class="view-all" data-target="grid">전체보기 ›</button>
+      </div>
       <div class="row-wrap">
         <div class="row" id="popularRow"></div>
         <div class="row-hint" aria-hidden="true">›</div>

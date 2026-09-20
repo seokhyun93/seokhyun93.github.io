@@ -64,6 +64,27 @@ async function loadPopular() {
   setupRowScrollHint(popularRow);
 }
 
+async function showCategoryAll(category, label) {
+  const res = await fetch('/api/products?section=category&category=' + encodeURIComponent(category) + '&limit=300');
+  const data = await res.json();
+  searchInput.value = '';
+  searchResultEl.style.display = '';
+  searchResultEl.innerHTML = data.items.length
+    ? `<div class="result-title">${esc(label)} 전체보기 (${data.items.length})</div><div class="grid">${data.items.map(cardHtml).join('')}</div>`
+    : '<div class="empty">상품이 없습니다.</div>';
+  searchResultEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+document.querySelectorAll('.view-all').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    if (btn.dataset.target === 'grid') {
+      gridEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+    if (btn.dataset.category) showCategoryAll(btn.dataset.category, btn.dataset.label || '');
+  });
+});
+
 let gridPage = 1;
 let gridLoading = false;
 let gridHasMore = true;
