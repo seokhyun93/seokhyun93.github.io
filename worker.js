@@ -913,9 +913,11 @@ async function coupangRequest(env, method, pathKey, { params, body } = {}) {
     headers: { Authorization: authorization, 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   });
-  const data = await resp.json();
-  if (!resp.ok || data.rCode !== '0') {
-    throw new Error(`쿠팡 API 오류 [${data.rCode}] ${data.rMessage || resp.statusText}`);
+  const rawText = await resp.text();
+  let data;
+  try { data = JSON.parse(rawText); } catch { data = null; }
+  if (!resp.ok || !data || data.rCode !== '0') {
+    throw new Error(`쿠팡 API 오류 (HTTP ${resp.status}) [${data?.rCode}] ${data?.rMessage || rawText.slice(0, 300)}`);
   }
   return data.data;
 }
