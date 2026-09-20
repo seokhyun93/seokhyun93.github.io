@@ -868,6 +868,94 @@ function checkApiToken(request, env) {
   return !!env.API_TOKEN && token === env.API_TOKEN;
 }
 
+// ============================== 쿠팡 파트너스 API ==============================
+// 토스와 달리 IP 등록이 필요 없어서(2026-09-20 가이드 문서 확인) Worker에서 바로 호출한다.
+// HMAC 서명 규칙은 쿠팡 공식 가이드 기준: datetime(yyMMddTHHmmssZ, GMT) + method + path + query
+// 문서: https://developers.coupang.com/ko/getting-started/creating-hmac-signature
+
+const COUPANG_API_DOMAIN = 'https://api-gateway.coupang.com';
+const COUPANG_PATHS = {
+  deeplink: '/v2/providers/affiliate_open_api/apis/openapi/v1/deeplink',
+  search: '/v2/providers/affiliate_open_api/apis/openapi/products/search',
+};
+
+function coupangGmtDatetime() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const yy = String(d.getUTCFullYear()).slice(2);
+  return `${yy}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}Z`;
+}
+
+async function coupangHmacSign(env, method, path, query) {
+  const datetime = coupangGmtDatetime();
+  const message = `${datetime}${method}${path}${query || ''}`;
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(env.COUPANG_SECRET_KEY),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+  );
+  const sigBuf = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message));
+  const signature = [...new Uint8Array(sigBuf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return `CEA algorithm=HmacSHA256, access-key=${env.COUPANG_ACCESS_KEY}, signed-date=${datetime}, signature=${signature}`;
+}
+
+async function coupangRequest(env, method, pathKey, { params, body } = {}) {
+  if (!env.COUPANG_ACCESS_KEY || !env.COUPANG_SECRET_KEY) {
+    throw new Error('쿠팡 파트너스 API 키(COUPANG_ACCESS_KEY/COUPANG_SECRET_KEY)가 설정되지 않았습니다.');
+  }
+  const path = COUPANG_PATHS[pathKey];
+  const query = params
+    ? '?' + Object.entries(params).filter(([, v]) => v !== undefined && v !== '').map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&')
+    : '';
+  const authorization = await coupangHmacSign(env, method, path, query);
+
+  const resp = await fetch(`${COUPANG_API_DOMAIN}${path}${query}`, {
+    method,
+    headers: { Authorization: authorization, 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await resp.json();
+  if (!resp.ok || data.rCode !== '0') {
+    throw new Error(`쿠팡 API 오류 [${data.rCode}] ${data.rMessage || resp.statusText}`);
+  }
+  return data.data;
+}
+
+// coupangUrls: 일반 쿠팡 상품 URL 배열 (예: https://www.coupang.com/vp/products/...)
+// → 파트너스 추적 단축 링크(shortenUrl)로 변환된 배열 반환
+async function coupangCreateDeeplinks(env, coupangUrls, subId) {
+  return coupangRequest(env, 'POST', 'deeplink', { body: { coupangUrls, subId } });
+}
+
+async function coupangSearchProducts(env, keyword, limit = 10) {
+  return coupangRequest(env, 'GET', 'search', { params: { keyword, limit } });
+}
+
+async function handleApiCoupangDeeplink(request, env) {
+  if (!checkApiToken(request, env)) return jsonResponse({ error: 'unauthorized' }, 401);
+  try {
+    const body = await request.json();
+    const urls = Array.isArray(body.urls) ? body.urls : [body.url].filter(Boolean);
+    if (!urls.length) return jsonResponse({ error: 'urls(또는 url)가 필요합니다' }, 400);
+    const data = await coupangCreateDeeplinks(env, urls, body.subId);
+    return jsonResponse({ ok: true, data });
+  } catch (err) {
+    return jsonResponse({ error: err && err.message ? err.message : String(err) }, 500);
+  }
+}
+
+async function handleApiCoupangSearch(request, env, url) {
+  if (!checkApiToken(request, env)) return jsonResponse({ error: 'unauthorized' }, 401);
+  try {
+    const keyword = url.searchParams.get('keyword');
+    const limit = parseInt(url.searchParams.get('limit') || '10', 10);
+    if (!keyword) return jsonResponse({ error: 'keyword가 필요합니다' }, 400);
+    const data = await coupangSearchProducts(env, keyword, limit);
+    return jsonResponse({ ok: true, data });
+  } catch (err) {
+    return jsonResponse({ error: err && err.message ? err.message : String(err) }, 500);
+  }
+}
+
 async function handleApiUpload(request, env) {
   if (!checkApiToken(request, env)) {
     return jsonResponse({ error: 'unauthorized' }, 401);
@@ -1734,6 +1822,8 @@ export default {
       if (path === '/sitemap.xml' && request.method === 'GET') return handleSitemap(env);
       if (path === '/api/products' && request.method === 'GET') return handleListProducts(env, url);
       if (path === '/api/admin/owner-ips' && request.method === 'POST') return handleApiAddOwnerIps(request, env);
+      if (path === '/api/admin/coupang/deeplink' && request.method === 'POST') return handleApiCoupangDeeplink(request, env);
+      if (path === '/api/admin/coupang/search' && request.method === 'GET') return handleApiCoupangSearch(request, env, url);
       if (path === '/api/admin/products' && request.method === 'POST') return handleApiUpload(request, env);
       if (path.startsWith('/api/admin/products/') && request.method === 'POST') {
         return handleApiEdit(request, env, parseInt(path.slice('/api/admin/products/'.length), 10));
