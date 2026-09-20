@@ -889,7 +889,8 @@ function coupangGmtDatetime() {
 
 async function coupangHmacSign(env, method, path, query) {
   const datetime = coupangGmtDatetime();
-  const message = `${datetime}${method}${path}${query || ''}`;
+  const queryForSig = query && query.startsWith('?') ? query.slice(1) : (query || '');
+  const message = `${datetime}${method}${path}${queryForSig}`;
   const key = await crypto.subtle.importKey(
     'raw', new TextEncoder().encode(env.COUPANG_SECRET_KEY),
     { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
