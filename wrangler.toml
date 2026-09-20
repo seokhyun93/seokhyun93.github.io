@@ -3,6 +3,9 @@ main = "worker.js"
 compatibility_date = "2025-06-01"
 keep_vars = true
 
+[triggers]
+crons = ["0 0 * * *"]
+
 [assets]
 directory = "./"
 binding = "ASSETS"

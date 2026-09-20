@@ -1253,6 +1253,57 @@ async function handleApiTodayDealsSync(request, env) {
   }
 }
 
+// 쿠팡 골드박스(오늘의 특가) 자동 동기화. 토스와 달리 IP 제한이 없어 Worker에서 직접
+// 쿠팡 API를 호출해 바로 D1에 반영한다. "오늘 최저가"(today_deal)와 같은 카테고리를
+// 공유해서 같은 화면 섹션에 노출되며, 토스 동기화와 동일하게 추가/갱신만 하고 절대
+// 삭제하지 않는다 (사장님 지시: "이제부터 항상 추가만 (삭제 안함)"). 예전 토스 크론이
+// 실패하는 API 호출 앞에서 먼저 삭제부터 해서 데이터가 통째로 날아간 사고가 있었으니,
+// 여기에 삭제 로직을 절대 추가하지 말 것.
+async function syncGoldbox(env) {
+  await ensureSchema(env);
+  const items = await coupangRequest(env, 'GET', 'goldbox', { params: { limit: 100 } });
+  const { results: existingRows } = await env.DB.prepare(
+    "SELECT id, link1_url FROM products WHERE category = 'today_deal'"
+  ).all();
+  const existingIdByLink = new Map(existingRows.map((r) => [r.link1_url, r.id]));
+
+  const results = [];
+  for (const item of items || []) {
+    const title = `🔥오늘만! ${item.productName}`;
+    try {
+      const existingId = existingIdByLink.get(item.productUrl);
+      if (existingId) {
+        await env.DB.prepare(
+          'UPDATE products SET title = ?, image_key = ? WHERE id = ?'
+        ).bind(title, item.productImage, existingId).run();
+        results.push({ ok: true, title, mode: 'updated' });
+      } else {
+        await insertProduct(env, {
+          title,
+          key: item.productImage,
+          detailLink: item.productUrl,
+          links: [{ label: '쿠팡 링크', url: item.productUrl }],
+          category: 'today_deal',
+        });
+        results.push({ ok: true, title, mode: 'inserted' });
+      }
+    } catch (err) {
+      results.push({ ok: false, title, error: err.message });
+    }
+  }
+  return { results };
+}
+
+async function handleApiCoupangSyncGoldbox(request, env) {
+  if (!checkApiToken(request, env)) return jsonResponse({ error: 'unauthorized' }, 401);
+  try {
+    const { results } = await syncGoldbox(env);
+    return jsonResponse({ results });
+  } catch (err) {
+    return jsonResponse({ error: err && err.message ? err.message : String(err) }, 500);
+  }
+}
+
 const YOUTUBE_REDIRECT_URI = 'https://seokhyun93-github-io.tjrgus3709.workers.dev/admin/youtube/callback';
 const YOUTUBE_SCOPES = 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly';
 
@@ -1855,6 +1906,7 @@ export default {
       if (path === '/api/admin/instagram/status' && request.method === 'GET') return handleApiInstagramStatus(request, env, url);
       if (path === '/api/admin/instagram/media_publish' && request.method === 'POST') return handleApiInstagramMediaPublish(request, env);
       if (path === '/api/admin/today-deals/sync' && request.method === 'POST') return handleApiTodayDealsSync(request, env);
+      if (path === '/api/admin/coupang/sync-goldbox' && request.method === 'POST') return handleApiCoupangSyncGoldbox(request, env);
 
       if (path.startsWith('/images/') && request.method === 'GET') return handleImage(env, path, request);
 
@@ -1862,5 +1914,11 @@ export default {
     } catch (err) {
       return new Response('Server error: ' + (err && err.message ? err.message : String(err)), { status: 500 });
     }
+  },
+
+  // 매일 쿠팡 골드박스를 동기화한다. syncGoldbox는 추가/갱신만 하고 절대 삭제하지
+  // 않으므로(위 주석 참고), 실패해도 기존 데이터에 영향이 없다 — 실패는 그냥 무시.
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(syncGoldbox(env).catch(() => {}));
   },
 };
